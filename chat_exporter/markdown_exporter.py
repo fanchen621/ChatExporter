@@ -1,16 +1,16 @@
 import os
 import re
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
 
-from .models import Conversation, Message, MessagePart, MessagePartType, Role
+from .models import Conversation, Message, MessagePartType, Role
 
 
 class MarkdownExporter:
-    def __init__(self, include_metadata: bool = True, include_timestamp: bool = True, include_thinking: bool = False):
+    def __init__(self, include_metadata: bool = True, include_timestamp: bool = True, include_thinking: bool = True):
         self.include_metadata = include_metadata
         self.include_timestamp = include_timestamp
+        # 用户反馈：默认保留思考过程，GUI 不再提供关闭开关。
         self.include_thinking = include_thinking
 
     def export(self, conv: Conversation, output_path: Optional[str] = None) -> str:
@@ -26,7 +26,7 @@ class MarkdownExporter:
     def _build_markdown(self, conv: Conversation) -> str:
         lines = []
 
-        lines.append(f"# {conv.title}")
+        lines.append(f"# {conv.title or '(无标题对话)'}")
         lines.append("")
 
         meta_lines = []
@@ -143,7 +143,7 @@ class MarkdownExporter:
 
         if tool_results:
             for tr in tool_results:
-                output = tr.tool_output or ""
+                output = tr.tool_output or tr.content or ""
                 if len(output) > 2000:
                     output = output[:2000] + "\n... (输出已截断)"
                 parts_text.append(f"\n<details>\n<summary>📎 工具返回结果</summary>\n\n```\n{output}\n```\n\n</details>\n")
@@ -172,7 +172,7 @@ class MarkdownExporter:
 
     @staticmethod
     def _indent(text: str, prefix: str) -> str:
-        lines = text.split("\n")
+        lines = str(text).split("\n")
         return ("\n" + prefix).join(lines)
 
     @staticmethod
@@ -183,6 +183,7 @@ class MarkdownExporter:
 
     @staticmethod
     def sanitize_filename(name: str) -> str:
+        name = str(name or "conversation")
         name = re.sub(r'[<>:"/\\|?*]', '_', name)
         name = re.sub(r'_+', '_', name)
         name = name.strip('_ .')
@@ -208,7 +209,7 @@ class MarkdownExporter:
                 filepath = f"{base}_{counter}{ext}"
                 counter += 1
 
-            exporter = MarkdownExporter()
+            exporter = MarkdownExporter(include_thinking=True)
             exporter.export(conv, filepath)
             exported += 1
 
