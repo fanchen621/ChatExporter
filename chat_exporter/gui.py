@@ -36,7 +36,8 @@ class ChatExporterGUI:
 
         self._setup_style()
         self._build_ui()
-        self._detect_apps()
+        # 延迟启动检测，避免窗口未渲染就阻塞
+        self.root.after(100, self._detect_apps_async)
 
     def _setup_style(self):
         style = ttk.Style()
@@ -266,26 +267,105 @@ class ChatExporterGUI:
         self.root.update_idletasks()
 
     def _detect_apps(self):
-        self._set_status("正在检测已安装的程序...")
+        """同步检测（供手动刷新使用），实际调用异步版本"""
+        self._detect_apps_async()
+
+    def _detect_apps_async(self):
+        """在后台线程检测程序，避免阻塞主线程导致窗口卡死"""
+        self._show_loading("正在检测已安装的程序...")
+
+        def detect_thread():
+            results = []
+            first_available = None
+            for adapter in self.adapters:
+                try:
+                    # 先快速检测程序是否存在，避免对所有适配器都执行耗时的 get_app_info
+                    is_available = adapter.detect()
+                    if is_available:
+                        info = adapter.get_app_info()
+                        if first_available is None:
+                            first_available = adapter
+                    else:
+                        info = AppInfo(
+                            name=adapter.name,
+                            display_name=adapter.display_name,
+                            is_available=False,
+                            data_path=None,
+                            conversation_count=0
+                        )
+                    results.append((adapter, info, is_available))
+                except Exception as e:
+                    info = AppInfo(
+                        name=adapter.name,
+                        display_name=adapter.display_name,
+                        is_available=False,
+                        data_path=None,
+                        conversation_count=0
+                    )
+                    results.append((adapter, info, False))
+                    print(f"检测 {adapter.name} 失败: {e}")
+
+            self.root.after(0, lambda: self._on_apps_detected(results, first_available))
+
+        threading.Thread(target=detect_thread, daemon=True).start()
+
+    def _on_apps_detected(self, results, first_available):
+        """检测完成后在主线程更新 UI"""
+        self._hide_loading()
+
         for widget in self.app_list_frame.winfo_children():
             widget.destroy()
         self.app_buttons.clear()
         self.app_status_labels.clear()
 
-        first_available = None
-        for adapter in self.adapters:
-            self._add_app_row(adapter)
-            if adapter.detect() and first_available is None:
-                first_available = adapter
+        for adapter, info, is_available in results:
+            self._add_app_row(adapter, info, is_available)
 
         if first_available:
             self._select_app(first_available)
 
-        self._set_status("检测完成")
+        available_count = sum(1 for _, _, is_available in results if is_available)
+        self._set_status(f"检测完成，发现 {available_count} 个程序")
 
-    def _add_app_row(self, adapter):
-        info = adapter.get_app_info()
-        status_icon = "✅" if info.is_available else "❌"
+    def _show_loading(self, text: str):
+        """显示加载遮罩，防止用户操作并提示正在加载"""
+        if hasattr(self, "_loading_frame") and self._loading_frame:
+            self._loading_label.config(text=text)
+            self._loading_frame.lift()
+            return
+
+        self._loading_frame = tk.Frame(self.root, bg="#ffffff", cursor="watch")
+        self._loading_frame.place(relx=0, rely=0, relwidth=1, relheight=1)
+
+        # 半透明遮罩效果
+        self._loading_frame.update_idletasks()
+
+        self._loading_label = tk.Label(
+            self._loading_frame,
+            text=text,
+            font=("Microsoft YaHei UI", 14),
+            bg="#ffffff",
+            fg="#2563eb"
+        )
+        self._loading_label.pack(expand=True)
+
+        # 强制刷新让遮罩立即显示
+        self.root.update_idletasks()
+
+    def _hide_loading(self):
+        """隐藏加载遮罩"""
+        if hasattr(self, "_loading_frame") and self._loading_frame:
+            self._loading_frame.destroy()
+            self._loading_frame = None
+
+
+    def _add_app_row(self, adapter, info: Optional[AppInfo] = None, is_available: bool = False):
+        """添加左侧应用按钮行；info 和 is_available 由调用方预计算"""
+        if info is None:
+            info = adapter.get_app_info()
+            is_available = info.is_available
+
+        status_icon = "✅" if is_available else "❌"
 
         # 使用 Canvas 画左侧 3px 强调条，不占用按钮内部空间
         row = tk.Frame(self.app_list_frame, bg="#ffffff")
@@ -295,15 +375,16 @@ class ChatExporterGUI:
                                   highlightthickness=0, bd=0)
         border_canvas.pack(side=tk.LEFT, fill=tk.Y)
 
+        display_name = info.display_name if info else adapter.display_name
         btn = tk.Button(
             row,
-            text=f"{status_icon}  {info.display_name}",
+            text=f"{status_icon}  {display_name}",
             anchor=tk.W,
             font=("Microsoft YaHei UI", 10),
             relief=tk.FLAT,
-            bg="#ffffff" if info.is_available else "#f9fafb",
-            fg="#1e293b" if info.is_available else "#94a3b8",
-            cursor="hand2" if info.is_available else "arrow",
+            bg="#ffffff" if is_available else "#f9fafb",
+            fg="#1e293b" if is_available else "#94a3b8",
+            cursor="hand2" if is_available else "arrow",
             padx=10,
             pady=8,
             activebackground="#f1f5f9",
@@ -313,7 +394,7 @@ class ChatExporterGUI:
         btn.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         # 悬停效果
-        if info.is_available:
+        if is_available:
             btn.bind("<Enter>", lambda e, b=btn: b.configure(bg="#f8fafc"))
             btn.bind("<Leave>", lambda e, b=btn: b.configure(bg="#ffffff") if b.cget("bg") != "#dbeafe" else None)
 
@@ -328,8 +409,9 @@ class ChatExporterGUI:
                 if border:
                     border.configure(bg="#2563eb")
             else:
-                info = next((a.get_app_info() for a in self.adapters if a.name == name), None)
-                if info and info.is_available:
+                # 从按钮当前状态判断可用性，避免再次调用 get_app_info 阻塞
+                is_available = btn.cget("cursor") == "hand2"
+                if is_available:
                     btn.configure(bg="#ffffff", fg="#1e293b", font=("Microsoft YaHei UI", 10))
                 else:
                     btn.configure(bg="#f9fafb", fg="#94a3b8", font=("Microsoft YaHei UI", 10))
@@ -352,7 +434,7 @@ class ChatExporterGUI:
             return
 
         adapter_name = self.current_adapter.display_name
-        self._set_status(f"正在加载 {adapter_name} 的对话列表...")
+        self._show_loading(f"正在加载 {adapter_name} 的对话列表...")
 
         for item in self.conv_tree.get_children():
             self.conv_tree.delete(item)
@@ -362,6 +444,7 @@ class ChatExporterGUI:
                 convs = self.current_adapter.list_conversations()
                 self.root.after(0, lambda: self._on_conversations_loaded(convs, generation))
             except Exception as e:
+                self.root.after(0, lambda: self._on_conversations_loaded([], generation))
                 self.root.after(0, lambda: self._set_status(f"加载失败: {e}"))
 
         threading.Thread(target=load_thread, daemon=True).start()
@@ -370,6 +453,7 @@ class ChatExporterGUI:
         # 如果 generation 已过期，说明用户已经切换了程序，丢弃旧结果
         if generation != self._load_generation:
             return
+        self._hide_loading()
         self.current_conversations = convs
         self.conv_count_label.config(text=f"共 {len(convs)} 个对话")
         self._filter_conversations()
