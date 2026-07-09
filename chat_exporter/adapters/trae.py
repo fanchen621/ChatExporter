@@ -1,3 +1,4 @@
+import ctypes
 import hashlib
 import json
 import os
@@ -87,7 +88,6 @@ class TraeAdapter(BaseAdapter):
 
         self._decryption_attempted = True
 
-        # 路径 1: 环境变量密钥。注意不要在代码或仓库里硬编码真实密钥。
         env_key = self._load_env_key()
         if env_key:
             result = self._try_decrypt(env_key)
@@ -95,17 +95,14 @@ class TraeAdapter(BaseAdapter):
                 self._decrypted_db_path = result
                 return result
 
-        # 路径 2: 指纹匹配的本地缓存密钥。
         cached_key = self._load_cached_key()
         if cached_key:
             result = self._try_decrypt(cached_key)
             if result:
                 self._decrypted_db_path = result
                 return result
-            # 缓存失效时清理，避免后续反复失败。
             self._delete_key_cache()
 
-        # 路径 3: 可选内存扫描。默认禁用，保证无密钥时快速回退。
         if self._memory_scan_enabled():
             runtime_key = self._extract_key_from_memory()
             if runtime_key:
@@ -115,7 +112,6 @@ class TraeAdapter(BaseAdapter):
                     self._decrypted_db_path = result
                     return result
 
-        # 路径 4: 快速回退到 state/logs。
         return None
 
     @staticmethod
@@ -150,7 +146,6 @@ class TraeAdapter(BaseAdapter):
         return self._env_truthy(KEY_CACHE_ENV, default=True)
 
     def _try_decrypt(self, key: bytes) -> Optional[str]:
-        """用给定密钥解密数据库，返回临时文件路径。"""
         if not key or len(key) != 32:
             return None
 
@@ -187,7 +182,6 @@ class TraeAdapter(BaseAdapter):
         except Exception:
             return None
 
-        # SQLite page 1 body 校验：这里不是完整 HMAC 校验，只用于快速排除错误 key。
         try:
             ps = struct.unpack(">H", decrypted[:2])[0]
         except struct.error:
@@ -212,10 +206,7 @@ class TraeAdapter(BaseAdapter):
                         break
 
                     iv = page_data[IV_OFFSET:IV_OFFSET + 16]
-                    if page_num == 1:
-                        ct = page_data[16:USABLE_SIZE]
-                    else:
-                        ct = page_data[:USABLE_SIZE]
+                    ct = page_data[16:USABLE_SIZE] if page_num == 1 else page_data[:USABLE_SIZE]
 
                     cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
                     dec = cipher.decryptor()
@@ -238,7 +229,6 @@ class TraeAdapter(BaseAdapter):
     # ========== 密钥缓存 ==========
 
     def _db_fingerprint(self) -> Optional[str]:
-        """生成轻量数据库指纹，用于防止旧缓存 key 误用到新库。"""
         try:
             st = os.stat(self.encrypted_db_path)
             with open(self.encrypted_db_path, "rb") as f:
@@ -290,7 +280,6 @@ class TraeAdapter(BaseAdapter):
         try:
             with open(cache_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False)
-            # POSIX 有效；Windows 下作为 best-effort，不依赖它提供安全保证。
             try:
                 os.chmod(cache_path, 0o600)
             except OSError:
@@ -307,9 +296,7 @@ class TraeAdapter(BaseAdapter):
     # ========== 可选内存扫描 ==========
 
     def _extract_key_from_memory(self) -> Optional[bytes]:
-        """从运行中的 TRAE 进程内存中提取 SQLCipher 密钥（默认不调用）。"""
         try:
-            import ctypes
             import ctypes.wintypes as wt
         except ImportError:
             return None
@@ -481,7 +468,6 @@ class TraeAdapter(BaseAdapter):
                                 continue
                             total_scanned += len(data)
 
-                            # 兼容两种形态：32B 原始 key、64 字符 hex key。
                             for match in re.finditer(rb"[0-9a-fA-F]{64}", data):
                                 candidate = self._parse_key_hex(match.group(0).decode("ascii", errors="ignore"))
                                 if candidate and test_key(candidate):
@@ -503,10 +489,10 @@ class TraeAdapter(BaseAdapter):
 
     @staticmethod
     def _find_trae_pids(k32, process_entry_type) -> List[int]:
+        import ctypes.wintypes as wt
         TH32CS_SNAPPROCESS = 0x00000002
         snap = k32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
-        invalid_handle = getattr(k32, "INVALID_HANDLE_VALUE", None)
-        if not snap or snap == invalid_handle:
+        if not snap or snap == ctypes.c_void_p(-1).value:
             return []
 
         pe = process_entry_type()
