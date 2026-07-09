@@ -1,0 +1,201 @@
+# ChatExporter - 多程序对话导出工具
+
+一个强大的跨平台对话导出工具，支持从多个 AI 助手程序中提取和导出对话记录为 Markdown 格式。
+
+## ✨ 特性
+
+- **多程序支持**: TRAE SOLO CN、QoderWork CN、WorkBuddy、QClaw、腾讯 Marvis
+- **数据库解密**: 突破 TRAE SOLO CN 的 SQLCipher 加密，直接读取数据库
+- **智能标题**: 自动清洗无效标题，提取有意义的对话主题
+- **完整导出**: 支持文本、思考过程、工具调用、代码块等所有内容类型
+- **现代界面**: 简洁美观的 GUI，支持实时预览和批量导出
+- **隐私保护**: 所有数据本地处理，不上传任何信息
+
+##  安装
+
+### 方法一：下载预编译版本（推荐）
+
+从 [Releases](https://github.com/fanchen621/ChatExporter/releases) 页面下载最新的 `ChatExporter.exe`，双击即可运行。
+
+### 方法二：从源码运行
+
+```bash
+# 克隆仓库
+git clone https://github.com/fanchen621/ChatExporter.git
+cd ChatExporter
+
+# 安装依赖
+pip install -r requirements.txt
+
+# 运行程序
+python main.py
+```
+
+### 方法三：自行打包
+
+```bash
+# 安装 PyInstaller
+pip install pyinstaller
+
+# 打包为单个 EXE
+python build_exe.py
+```
+
+打包完成后，EXE 文件位于 `dist/ChatExporter.exe`
+
+## 🚀 使用方法
+
+### 基本使用
+
+1. **启动程序**: 双击 `ChatExporter.exe` 或运行 `python main.py`
+2. **自动检测**: 程序会自动检测已安装的 AI 助手程序
+3. **选择程序**: 点击左侧面板中的程序名称
+4. **浏览对话**: 在中间面板查看对话列表，支持搜索过滤
+5. **预览内容**: 点击对话后在右侧查看 Markdown 预览
+6. **导出对话**: 
+   - 单个导出：选中对话后点击「📥 导出选中」
+   - 批量导出：点击「📦 批量导出全部」
+
+### TRAE SOLO CN 特殊配置
+
+TRAE SOLO CN 使用 SQLCipher 加密数据库，启动程序时需要提供解密密钥。本工具支持两种方式：
+
+#### 方式一：自动从内存提取（推荐）
+
+1. 启动 TRAE SOLO CN
+2. 直接运行 ChatExporter
+3. 程序会自动扫描 TRAE 进程内存，提取 SQLCipher 密钥
+
+#### 方式二：手动配置环境变量
+
+如果你知道密钥，可以设置为环境变量：
+
+```bash
+# Windows PowerShell
+$env:TRAE_SQLCIPHER_KEY="<你的SQLCipher密钥>"
+python main.py
+
+# Windows CMD
+set TRAE_SQLCIPHER_KEY=<你的SQLCipher密钥>
+python main.py
+```
+
+> ⚠️ **安全提示**: 密钥属于敏感信息，请不要上传到任何公开仓库或分享给他人。
+
+如果未配置密钥且无法从内存提取，程序会回退到日志解析模式（功能受限）。
+
+### 导出选项
+
+- **包含思考过程**: 勾选后会在导出文件中包含 AI 的思考/推理过程
+- **时间戳**: 默认包含每条消息的时间戳
+- **元数据**: 包含对话的基本信息（来源程序、创建时间、消息数量等）
+
+## 📁 支持的数据格式
+
+### 消息类型
+- ✅ 文本消息
+- ✅ 思考过程（Thinking/Reasoning）
+- ✅ 工具调用（Tool Calls）
+- ✅ 工具返回结果
+- ✅ 代码块（带语法高亮）
+- ✅ 文件附件
+- ✅ 图片引用
+
+### 导出格式
+- Markdown (.md) - 支持所有主流 Markdown 阅读器
+- 文件名格式：`{对话标题}_{时间戳}.md`
+
+##  技术细节
+
+### 架构设计
+
+```
+ChatExporter/
+├── main.py                 # 程序入口
+├── build_exe.py           # PyInstaller 打包脚本
+├── requirements.txt       # Python 依赖
+── chat_exporter/
+│   ├── gui.py            # Tkinter GUI 界面
+│   ├── models.py         # 数据模型定义
+│   ├── markdown_exporter.py  # Markdown 导出器
+│   └── adapters/         # 各程序适配器
+│       ├── base.py       # 基础适配器类
+│       ├── trae.py       # TRAE SOLO CN（含 SQLCipher 解密）
+│       ├── qoderwork.py  # QoderWork CN
+│       ├── workbuddy.py  # WorkBuddy
+│       ├── qclaw.py      # QClaw
+│       └── marvis.py     # 腾讯 Marvis
+```
+
+### 数据库解密原理
+
+TRAE SOLO CN 使用 SQLCipher 4 加密：
+- 加密算法：AES-256-CBC
+- KDF 迭代：256,000 次
+- 验证方式：HMAC-SHA512
+
+本工具通过以下方式获取解密密钥：
+1. **环境变量**: 从 `TRAE_SQLCIPHER_KEY` 读取
+2. **内存提取**: 扫描 TRAE 进程内存，通过熵过滤和 AES-CBC 验证定位密钥
+
+解密后的数据库会保存到临时文件，程序退出后自动清理。
+
+## ️ 开发指南
+
+### 添加新程序支持
+
+1. 在 `chat_exporter/adapters/` 创建新的适配器文件
+2. 继承 `BaseAdapter` 类
+3. 实现以下方法：
+   - `detect()`: 检测程序是否安装
+   - `get_app_info()`: 获取程序信息
+   - `list_conversations()`: 列出所有对话
+   - `get_conversation()`: 获取单个对话详情
+4. 在 `gui.py` 中注册新适配器
+
+### 代码规范
+
+- 使用 Python 3.8+
+- 遵循 PEP 8 编码规范
+- 类型注解：使用 `typing` 模块
+- 文档字符串：所有公共方法都需要 docstring
+
+##  贡献
+
+欢迎提交 Issue 和 Pull Request！
+
+### 贡献流程
+
+1. Fork 本仓库
+2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
+3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
+4. 推送到分支 (`git push origin feature/AmazingFeature`)
+5. 开启 Pull Request
+
+## 📝 更新日志
+
+### v1.0.0 (2026-07-09)
+-  初始版本发布
+- ✅ 支持 5 个 AI 助手程序
+- ✅ TRAE SOLO CN 数据库解密
+- ✅ 智能标题清洗
+- ✅ 现代 GUI 界面
+- ✅ 批量导出功能
+
+## ⚠️ 免责声明
+
+本工具仅供学习和研究使用。使用本工具导出对话记录时，请遵守相关程序的使用条款和隐私政策。作者不对因使用本工具造成的任何损失承担责任。
+
+## 📄 许可证
+
+本项目采用 MIT 许可证 - 详见 [LICENSE](LICENSE) 文件
+
+## 🙏 致谢
+
+- [PyInstaller](https://www.pyinstaller.org/) - Python 打包工具
+- [cryptography](https://cryptography.io/) - 加密库
+- [Tkinter](https://docs.python.org/3/library/tkinter.html) - GUI 框架
+
+---
+
+**Made with ❤️ by [Your Name]**
