@@ -36,42 +36,48 @@ class QoderWorkAdapter(BaseAdapter):
         if not self.detect():
             return []
 
-        conn = self._connect_db(self.db_path)
-        cursor = conn.cursor()
+        conn = None
+        try:
+            conn = self._connect_db(self.db_path)
+            cursor = conn.cursor()
 
-        cursor.execute("""
-            SELECT
-                c.id,
-                c.name,
-                c.created_at,
-                c.updated_at,
-                c.chat_type,
-                COUNT(DISTINCT sc.id) AS sub_count,
-                COUNT(m.id) AS msg_count
-            FROM chats c
-            LEFT JOIN sub_chats sc ON c.id = sc.chat_id
-            LEFT JOIN messages m ON sc.id = m.sub_chat_id
-            WHERE c.deleted_at IS NULL
-            GROUP BY c.id
-            ORDER BY c.updated_at DESC
-        """)
+            cursor.execute("""
+                SELECT
+                    c.id,
+                    c.name,
+                    c.created_at,
+                    c.updated_at,
+                    c.chat_type,
+                    COUNT(DISTINCT sc.id) AS sub_count,
+                    COUNT(m.id) AS msg_count
+                FROM chats c
+                LEFT JOIN sub_chats sc ON c.id = sc.chat_id
+                LEFT JOIN messages m ON sc.id = m.sub_chat_id
+                WHERE c.deleted_at IS NULL
+                GROUP BY c.id
+                ORDER BY c.updated_at DESC
+            """)
 
-        conversations = []
-        for row in cursor.fetchall():
-            conv = Conversation(
-                id=row["id"],
-                title=row["name"] or "(无标题对话)",
-                created_at=self._ts_to_dt(row["created_at"], ms=False),
-                updated_at=self._ts_to_dt(row["updated_at"], ms=False),
-                source_app=self.display_name,
-                metadata={
-                    "chat_type": row["chat_type"],
-                    "msg_count": row["msg_count"] or 0,
-                }
-            )
-            conversations.append(conv)
+            conversations = []
+            for row in cursor.fetchall():
+                conv = Conversation(
+                    id=row["id"],
+                    title=row["name"] or "(无标题对话)",
+                    created_at=self._ts_to_dt(row["created_at"], ms=False),
+                    updated_at=self._ts_to_dt(row["updated_at"], ms=False),
+                    source_app=self.display_name,
+                    metadata={
+                        "chat_type": row["chat_type"],
+                        "msg_count": row["msg_count"] or 0,
+                    }
+                )
+                conversations.append(conv)
+        except Exception:
+            conversations = []
+        finally:
+            if conn:
+                conn.close()
 
-        conn.close()
         self._cached_conversations = conversations
         return conversations
 
@@ -79,44 +85,49 @@ class QoderWorkAdapter(BaseAdapter):
         if not self.detect():
             return None
 
-        conn = self._connect_db(self.db_path)
-        cursor = conn.cursor()
-
-        cursor.execute("""
-            SELECT id, name, created_at, updated_at
-            FROM chats
-            WHERE id = ?
-        """, (conv_id,))
-        chat_row = cursor.fetchone()
-        if not chat_row:
-            conn.close()
-            return None
-
-        cursor.execute("""
-            SELECT id, name, session_id, model_level, created_at
-            FROM sub_chats
-            WHERE chat_id = ?
-            ORDER BY created_at ASC
-        """, (conv_id,))
-        sub_chats = cursor.fetchall()
-
-        messages = []
-        for sub_chat in sub_chats:
-            sub_chat_id = sub_chat["id"]
+        conn = None
+        try:
+            conn = self._connect_db(self.db_path)
+            cursor = conn.cursor()
 
             cursor.execute("""
-                SELECT id, message_id, role, parts, created_at, metadata
-                FROM messages
-                WHERE sub_chat_id = ?
-                ORDER BY sequence ASC
-            """, (sub_chat_id,))
+                SELECT id, name, created_at, updated_at
+                FROM chats
+                WHERE id = ?
+            """, (conv_id,))
+            chat_row = cursor.fetchone()
+            if not chat_row:
+                conn.close()
+                return None
 
-            for msg_row in cursor.fetchall():
-                msg = self._parse_message(msg_row, sub_chat["model_level"])
-                if msg:
-                    messages.append(msg)
+            cursor.execute("""
+                SELECT id, name, session_id, model_level, created_at
+                FROM sub_chats
+                WHERE chat_id = ?
+                ORDER BY created_at ASC
+            """, (conv_id,))
+            sub_chats = cursor.fetchall()
 
-        conn.close()
+            messages = []
+            for sub_chat in sub_chats:
+                sub_chat_id = sub_chat["id"]
+
+                cursor.execute("""
+                    SELECT id, message_id, role, parts, created_at, metadata
+                    FROM messages
+                    WHERE sub_chat_id = ?
+                    ORDER BY sequence ASC
+                """, (sub_chat_id,))
+
+                for msg_row in cursor.fetchall():
+                    msg = self._parse_message(msg_row, sub_chat["model_level"])
+                    if msg:
+                        messages.append(msg)
+        except Exception:
+            return None
+        finally:
+            if conn:
+                conn.close()
 
         conv = Conversation(
             id=chat_row["id"],

@@ -4,19 +4,16 @@ import re
 import sqlite3
 import struct
 import tempfile
-import shutil
 import time
 from datetime import datetime
-from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict
 
 from .base import BaseAdapter
 from ..models import AppInfo, Conversation, Message, MessagePart, MessagePartType, Role
 
 
-# SQLCipher key — 优先从环境变量读取，回退到进程内存提取
+# SQLCipher key — 优先从环境变量读取
 # 设置方式: set TRAE_SQLCIPHER_KEY=<your_key_hex>
-# 密钥获取: 启动 TRAE SOLO CN 后，程序会自动从进程内存中提取
 SQLCIPHER_KEY_HEX = os.environ.get("TRAE_SQLCIPHER_KEY", "")
 
 # SQLCipher 页面布局常量
@@ -25,6 +22,12 @@ RESERVE = 80  # IV(16) + HMAC(64)
 USABLE_SIZE = PAGE_SIZE - RESERVE  # 4016
 IV_OFFSET = USABLE_SIZE
 SQLITE_HEADER = b'SQLite format 3\x00'
+
+# 性能限制参数
+MEMORY_SCAN_TIMEOUT_SEC = 8       # 内存扫描最多 8 秒
+MEMORY_SCAN_MAX_BYTES = 300 * 1024 * 1024  # 最多扫描 300MB
+LOG_MAX_FILES = 5                 # 日志回退最多读 5 个文件
+LOG_TAIL_BYTES = 5 * 1024 * 1024  # 每个日志文件只读尾部 5MB
 
 
 class TraeAdapter(BaseAdapter):
@@ -40,7 +43,7 @@ class TraeAdapter(BaseAdapter):
         self.encrypted_db_path = os.path.join(self.modular_dir, "ai-agent", "database.db")
         self._cached_conversations = None
         self._decrypted_db_path = None
-        self._decryption_failed = False
+        self._decryption_attempted = False
         self._conversations_from_logs: Dict[str, List[Message]] = {}
 
     def detect(self) -> bool:
@@ -59,33 +62,40 @@ class TraeAdapter(BaseAdapter):
     # ========== SQLCipher 解密 ==========
 
     def _get_decrypted_db_path(self) -> Optional[str]:
-        """解密 SQLCipher 数据库到临时文件"""
+        """解密 SQLCipher 数据库到临时文件，带超时和大小限制"""
         if self._decrypted_db_path and os.path.exists(self._decrypted_db_path):
             return self._decrypted_db_path
-        if self._decryption_failed:
+        if self._decryption_attempted:
             return None
         if not os.path.exists(self.encrypted_db_path):
             return None
 
-        # 尝试硬编码密钥
-        key = bytes.fromhex(SQLCIPHER_KEY_HEX)
-        result = self._try_decrypt(key)
+        self._decryption_attempted = True
 
-        if not result:
-            # 尝试从运行中的 TRAE 进程提取密钥
-            runtime_key = self._extract_key_from_memory()
-            if runtime_key:
-                result = self._try_decrypt(runtime_key)
+        # 路径 1: 环境变量密钥
+        if SQLCIPHER_KEY_HEX:
+            key = bytes.fromhex(SQLCIPHER_KEY_HEX)
+            result = self._try_decrypt(key)
+            if result:
+                self._decrypted_db_path = result
+                return result
 
-        if result:
-            self._decrypted_db_path = result
-            return result
-        else:
-            self._decryption_failed = True
-            return None
+        # 路径 2: 有界内存扫描（最多 8 秒 / 300MB）
+        runtime_key = self._extract_key_from_memory()
+        if runtime_key:
+            result = self._try_decrypt(runtime_key)
+            if result:
+                self._decrypted_db_path = result
+                return result
+
+        # 路径 3: 快速回退到日志
+        return None
 
     def _try_decrypt(self, key: bytes) -> Optional[str]:
         """用给定密钥解密数据库，返回临时文件路径"""
+        if not key or len(key) != 32:
+            return None
+
         try:
             from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
             from cryptography.hazmat.backends import default_backend
@@ -100,7 +110,7 @@ class TraeAdapter(BaseAdapter):
             page1 = f.read(PAGE_SIZE)
 
         iv = page1[IV_OFFSET:IV_OFFSET + 16]
-        ciphertext = page1[16:USABLE_SIZE]  # 4000 bytes
+        ciphertext = page1[16:USABLE_SIZE]
 
         try:
             cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
@@ -109,7 +119,6 @@ class TraeAdapter(BaseAdapter):
         except Exception:
             return None
 
-        # SQLite 头部检查
         ps = struct.unpack('>H', decrypted[:2])[0]
         if ps == 1:
             ps = 65536
@@ -120,7 +129,7 @@ class TraeAdapter(BaseAdapter):
         if decrypted[5] != 64 or decrypted[6] != 32 or decrypted[7] != 32:
             return None
 
-        # 密钥有效，解密所有页
+        # 密钥有效，解密所有页到临时文件
         tmp_dir = tempfile.mkdtemp(prefix="trae_decrypt_")
         tmp_path = os.path.join(tmp_dir, "database_decrypted.db")
 
@@ -150,7 +159,7 @@ class TraeAdapter(BaseAdapter):
         return tmp_path
 
     def _extract_key_from_memory(self) -> Optional[bytes]:
-        """从运行中的 TRAE 进程内存中提取 SQLCipher 密钥"""
+        """从运行中的 TRAE 进程内存中提取 SQLCipher 密钥（有界扫描）"""
         try:
             import ctypes
             import ctypes.wintypes as wt
@@ -265,17 +274,29 @@ class TraeAdapter(BaseAdapter):
                 return False
             return len(set(data[:16])) >= 8
 
-        # 扫描每个进程的内存
+        # 有界扫描：最多扫描 MEMORY_SCAN_TIMEOUT_SEC 秒 / MEMORY_SCAN_MAX_BYTES 字节
         mbi = MEMORY_BASIC_INFORMATION()
         mbi_size = ctypes.sizeof(mbi)
+        start_time = time.monotonic()
+        total_scanned = 0
 
         for pid in pids:
+            if time.monotonic() - start_time > MEMORY_SCAN_TIMEOUT_SEC:
+                break
+            if total_scanned >= MEMORY_SCAN_MAX_BYTES:
+                break
+
             hProcess = k32.OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, False, pid)
             if not hProcess:
                 continue
 
             address = 0
             while address < 0x7FFFFFFFFFFF:
+                if time.monotonic() - start_time > MEMORY_SCAN_TIMEOUT_SEC:
+                    break
+                if total_scanned >= MEMORY_SCAN_MAX_BYTES:
+                    break
+
                 ret = k32.VirtualQueryEx(hProcess, ctypes.c_void_p(address), ctypes.byref(mbi), mbi_size)
                 if ret == 0:
                     break
@@ -286,11 +307,18 @@ class TraeAdapter(BaseAdapter):
                     break
 
                 if mbi.State == MEM_COMMIT and mbi.Protect in READABLE:
-                    chunk_max = 16 * 1024 * 1024
+                    # 限制单次读取块大小，避免读超大区域
+                    chunk_max = 4 * 1024 * 1024  # 4MB chunks
                     for off in range(0, size, chunk_max):
+                        if time.monotonic() - start_time > MEMORY_SCAN_TIMEOUT_SEC:
+                            break
+                        if total_scanned >= MEMORY_SCAN_MAX_BYTES:
+                            break
+
                         rs = min(chunk_max, size - off)
                         data = read_mem(hProcess, base + off, rs)
                         if data:
+                            total_scanned += len(data)
                             for o in range(0, len(data) - 32, 16):
                                 cand = data[o:o + 32]
                                 if not is_high_entropy(cand):
@@ -317,7 +345,7 @@ class TraeAdapter(BaseAdapter):
         if not self.detect():
             return []
 
-        # 优先尝试数据库
+        # 优先尝试数据库（带超时保护）
         db_path = self._get_decrypted_db_path()
         if db_path:
             conversations = self._get_conversations_from_db(db_path)
@@ -325,7 +353,7 @@ class TraeAdapter(BaseAdapter):
                 self._cached_conversations = conversations
                 return conversations
 
-        # 回退到日志解析
+        # 快速回退到日志解析
         conversations = self._list_conversations_from_logs()
         self._cached_conversations = conversations
         return conversations
@@ -350,7 +378,8 @@ class TraeAdapter(BaseAdapter):
                     s.project_id,
                     COUNT(m.message_id) AS msg_count
                 FROM chat_session s
-                LEFT JOIN chat_message m ON s.session_id = m.session_id AND (m.deleted_at = 0 OR m.deleted_at IS NULL)
+                LEFT JOIN chat_message m ON s.session_id = m.session_id
+                    AND (m.deleted_at = 0 OR m.deleted_at IS NULL)
                 WHERE (s.deleted_at = 0 OR s.deleted_at IS NULL)
                 GROUP BY s.session_id
                 ORDER BY s.updated_at DESC
@@ -410,13 +439,14 @@ class TraeAdapter(BaseAdapter):
                 ORDER BY message_index
             """, (session_id,))
 
-            for row in cursor.fetchall():
+            rows = cursor.fetchall()
+
+            for row in rows:
                 msg_id = row["message_id"]
                 msg_type = row["message_type"]
                 msg_role = row["message_role"]
                 ts = self._ts_to_dt(row["created_at"], ms=False)
 
-                # 解析模型信息
                 model = None
                 if row["user_message_context"]:
                     try:
@@ -449,24 +479,20 @@ class TraeAdapter(BaseAdapter):
                     task_row = cursor.fetchone()
                     if task_row:
                         parts = self._parse_task_content(task_row["content"])
-                        # task 消息的主内容在 THINKING/TOOL_CALL parts 里，不只 TEXT
-                        # 摘要优先；否则用第一个 THINKING part；否则汇总所有 parts
                         summary = (task_row["summary"] or "").strip() if task_row["summary"] else ""
                         if summary:
                             text = summary
                         else:
                             thinking = next((p.content for p in parts
                                              if p.type == MessagePartType.THINKING and p.content), "")
-                            if thinking:
-                                text = thinking[:500]
-                            else:
-                                text = " ".join(p.content for p in parts if p.content)[:500]
+                            text = thinking[:500] if thinking else " ".join(
+                                p.content for p in parts if p.content)[:500]
                         messages.append(Message(
                             role=role, content=text, timestamp=ts,
                             message_id=msg_id, parts=parts, model=model,
                         ))
                 else:
-                    # Fallback for unknown message types - try to find content in any subtable
+                    # Fallback for unknown message types
                     for subtable in ["chat_message_general", "chat_message_task"]:
                         cursor.execute(f"""
                             SELECT content FROM {subtable}
@@ -511,12 +537,7 @@ class TraeAdapter(BaseAdapter):
         return parts
 
     def _parse_task_content(self, content_json: str) -> List[MessagePart]:
-        """解析 chat_message_task.content JSON — AI 任务消息
-
-        实际结构：
-        - plan_item (主要): {plan_item: {thought, reasoning_content, tool_call_info, agent_status}}
-        - append_input: {append_input: {payload: {data: {parsed_query: [...]}}}}
-        """
+        """解析 chat_message_task.content JSON"""
         parts = []
         try:
             data = json.loads(content_json)
@@ -575,8 +596,7 @@ class TraeAdapter(BaseAdapter):
         return parts
 
     def _extract_plan_item_parts(self, plan: dict, parts: List[MessagePart]):
-        """从 plan_item 结构提取 parts: thought/reasoning -> THINKING, tool_call_info -> TOOL_CALL/TOOL_RESULT"""
-        # 1. 思考内容
+        """从 plan_item 结构提取 parts"""
         thought = plan.get("thought", "") or ""
         reasoning = plan.get("reasoning_content", "") or ""
         if reasoning:
@@ -584,7 +604,6 @@ class TraeAdapter(BaseAdapter):
         elif thought:
             parts.append(MessagePart(type=MessagePartType.THINKING, content=thought))
 
-        # 2. 工具调用
         tci = plan.get("tool_call_info")
         if isinstance(tci, dict):
             tname = tci.get("name", "") or ""
@@ -601,7 +620,6 @@ class TraeAdapter(BaseAdapter):
                     tool_input=tparams_str,
                 ))
 
-            # 3. 工具结果
             tresult = tci.get("result")
             if isinstance(tresult, dict):
                 status = tresult.get("status", "")
@@ -622,10 +640,10 @@ class TraeAdapter(BaseAdapter):
                         tool_output=json.dumps(tresult, ensure_ascii=False)[:10000],
                     ))
 
-    # ========== 日志解析（回退方案） ==========
+    # ========== 日志解析（快速回退方案） ==========
 
     def _list_conversations_from_logs(self) -> List[Conversation]:
-        """从 state.vscdb 和日志解析对话（回退方案）"""
+        """从 state.vscdb 和日志解析对话（快速回退方案）"""
         conversations = []
         convs_from_state = self._get_conversations_from_state()
         self._parse_logs_for_messages()
@@ -659,7 +677,7 @@ class TraeAdapter(BaseAdapter):
 
         conn = None
         try:
-            conn = sqlite3.connect(self.state_db_path)
+            conn = sqlite3.connect(f"file:{self.state_db_path}?mode=ro", uri=True)
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
 
@@ -720,6 +738,7 @@ class TraeAdapter(BaseAdapter):
         )
 
     def _parse_logs_for_messages(self):
+        """解析日志文件提取消息（限制最近文件数和尾部内容）"""
         if self._conversations_from_logs:
             return
 
@@ -730,11 +749,13 @@ class TraeAdapter(BaseAdapter):
                     if "stdout" in f.lower() and f.endswith(".log"):
                         log_files.append(os.path.join(root, f))
 
+        # 只取最近修改的文件，按修改时间倒序
         log_files.sort(key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0, reverse=True)
 
         session_messages: Dict[str, List[Message]] = {}
 
-        for log_path in log_files[:20]:
+        # 限制读取的文件数和每个文件的大小
+        for log_path in log_files[:LOG_MAX_FILES]:
             try:
                 self._parse_single_log(log_path, session_messages)
             except Exception:
@@ -743,6 +764,7 @@ class TraeAdapter(BaseAdapter):
         self._conversations_from_logs = session_messages
 
     def _parse_single_log(self, log_path: str, session_messages: Dict[str, List[Message]]):
+        """解析单个日志文件，只读尾部内容以加速"""
         session_id = None
         current_role = None
         current_content_lines = []
@@ -766,7 +788,16 @@ class TraeAdapter(BaseAdapter):
             current_role = None
             current_content_lines = []
 
+        # 只读文件尾部以加速
+        file_size = os.path.getsize(log_path)
+        read_start = max(0, file_size - LOG_TAIL_BYTES)
+
         with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+            if read_start > 0:
+                f.seek(read_start)
+                # 跳过可能截断的第一行
+                f.readline()
+
             for line in f:
                 line = line.rstrip("\n\r")
 
