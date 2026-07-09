@@ -1,10 +1,11 @@
 import os
+import subprocess
 import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from typing import Dict, List, Optional
 
-from .adapters.trae import TraeAdapter
+from .adapters.trae import TraeAdapter, SQLCIPHER_KEY_ENV
 from .adapters.qoderwork import QoderWorkAdapter
 from .adapters.workbuddy import WorkBuddyAdapter
 from .adapters.qclaw import QClawAdapter
@@ -16,7 +17,6 @@ from .markdown_exporter import MarkdownExporter
 class ChatExporterGUI:
     """多程序对话导出工具 - GUI 主类"""
 
-    # 配色方案
     COLOR_BG = "#f8fafc"
     COLOR_PANEL = "#ffffff"
     COLOR_BORDER = "#e2e8f0"
@@ -33,7 +33,6 @@ class ChatExporterGUI:
     COLOR_HOVER = "#f8fafc"
     COLOR_SELECTED = "#dbeafe"
 
-    # 大会话保护：预览截断不影响真实导出
     PREVIEW_MAX_CHARS = 350_000
     PREVIEW_PART_MAX_CHARS = 80_000
     TREE_INSERT_BATCH_SIZE = 250
@@ -56,18 +55,18 @@ class ChatExporterGUI:
         self.current_adapter = None
         self.current_conversations: List[Conversation] = []
         self.selected_conv: Optional[Conversation] = None
-        # 用户反馈：取消“是否包含思考过程”开关，默认始终包含。
         self.exporter = MarkdownExporter(include_metadata=True, include_timestamp=True, include_thinking=True)
         self._load_generation = 0
         self._preview_generation = 0
         self._tree_render_generation = 0
         self._filter_after_id = None
         self._tree_conv_map: Dict[str, Conversation] = {}
-        self._app_infos = {}  # 缓存 adapter.name -> AppInfo
+        self._app_infos = {}
+        self._key_extract_running = False
+        self.trae_key_button = None
 
         self._setup_style()
         self._build_ui()
-        # 窗口渲染后立即启动检测（仅文件存在性检查，毫秒级）
         self.root.after(50, self._detect_apps)
 
     # ========== 样式 ==========
@@ -160,14 +159,12 @@ class ChatExporterGUI:
         ttk.Button(parent, text="刷新检测", command=self._detect_apps).pack(fill=tk.X, padx=14, pady=(0, 14))
 
     def _build_center_panel(self, parent):
-        # 标题栏
         top = ttk.Frame(parent)
         top.pack(fill=tk.X, pady=(0, 10))
         ttk.Label(top, text="对话列表", style="Title.TLabel").pack(side=tk.LEFT)
         self.conv_count_label = ttk.Label(top, text="", style="Status.TLabel")
         self.conv_count_label.pack(side=tk.RIGHT)
 
-        # 搜索栏：去掉 emoji，避免 Windows/Tk 字体回退显示黑块
         search_frame = tk.Frame(parent, bg=self.COLOR_SEARCH_BG, padx=10, pady=8)
         search_frame.pack(fill=tk.X, pady=(0, 8))
         ttk.Label(search_frame, text="搜索", background=self.COLOR_SEARCH_BG).pack(side=tk.LEFT)
@@ -176,7 +173,6 @@ class ChatExporterGUI:
         ttk.Entry(search_frame, textvariable=self.search_var,
                   font=("Microsoft YaHei UI", 10)).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 0))
 
-        # 对话列表
         list_frame = ttk.Frame(parent)
         list_frame.pack(fill=tk.BOTH, expand=True)
 
@@ -195,12 +191,14 @@ class ChatExporterGUI:
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.conv_tree.bind("<<TreeviewSelect>>", self._on_conv_select)
 
-        # 底部按钮
         btn_frame = ttk.Frame(parent)
         btn_frame.pack(fill=tk.X, pady=(10, 0))
         ttk.Button(btn_frame, text="导出选中", command=self._export_selected,
                    style="Primary.TButton").pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
-        ttk.Button(btn_frame, text="批量导出", command=self._export_all).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0))
+        ttk.Button(btn_frame, text="批量导出", command=self._export_all).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 4))
+        self.trae_key_button = ttk.Button(btn_frame, text="提取 TRAE 密钥", command=self._extract_trae_key)
+        self.trae_key_button.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0))
+        self.trae_key_button.configure(state=tk.DISABLED)
 
     def _build_right_panel(self, parent):
         top = ttk.Frame(parent)
@@ -209,7 +207,6 @@ class ChatExporterGUI:
         self.preview_title_label = ttk.Label(top, text="", style="Status.TLabel")
         self.preview_title_label.pack(side=tk.RIGHT)
 
-        # 预览容器
         preview_frame = tk.Frame(parent, bg=self.COLOR_BORDER, highlightbackground=self.COLOR_BORDER,
                                  highlightthickness=1)
         preview_frame.pack(fill=tk.BOTH, expand=True)
@@ -228,10 +225,7 @@ class ChatExporterGUI:
         preview_frame.grid_rowconfigure(0, weight=1)
         preview_frame.grid_columnconfigure(0, weight=1)
 
-        # 角色着色标签
         self._setup_text_tags()
-
-        # 空状态提示
         self._show_preview_placeholder()
 
     def _setup_text_tags(self):
@@ -275,13 +269,23 @@ class ChatExporterGUI:
         if progress >= 0:
             self.progress["value"] = progress
 
+    def _set_busy_progress(self, busy: bool):
+        try:
+            if busy:
+                self.progress.configure(mode="indeterminate")
+                self.progress.start(12)
+            else:
+                self.progress.stop()
+                self.progress.configure(mode="determinate")
+                self.progress["value"] = 0
+        except Exception:
+            pass
+
     # ========== 程序检测 ==========
 
     def _detect_apps(self):
-        """在后台线程检测程序（仅文件存在性检查，毫秒级）"""
         self._set_status("正在检测已安装的程序...")
 
-        # 清空左侧列表，显示检测中提示
         for widget in self.app_list_frame.winfo_children():
             widget.destroy()
         self.app_buttons.clear()
@@ -320,7 +324,6 @@ class ChatExporterGUI:
         threading.Thread(target=detect_thread, daemon=True).start()
 
     def _on_apps_detected(self, results):
-        """检测完成后更新左侧面板（不自动选中，避免触发数据库加载）"""
         for widget in self.app_list_frame.winfo_children():
             widget.destroy()
 
@@ -329,6 +332,7 @@ class ChatExporterGUI:
 
         available_count = sum(1 for _, _, is_available in results if is_available)
         self._set_status(f"检测完成，发现 {available_count} 个可用程序。请点击左侧选择。")
+        self._update_app_actions()
 
     def _add_app_row(self, adapter, info: AppInfo, is_available: bool):
         status_text = "[可用]" if is_available else "[未安装]"
@@ -336,7 +340,6 @@ class ChatExporterGUI:
         row = tk.Frame(self.app_list_frame, bg=self.COLOR_PANEL)
         row.pack(fill=tk.X, pady=2)
 
-        # 用 Frame 替代 Canvas，避免部分 Windows/Tk 组合渲染出黑块。
         border = tk.Frame(row, width=3, height=40, bg=self.COLOR_BORDER)
         border.pack(side=tk.LEFT, fill=tk.Y)
         border.pack_propagate(False)
@@ -369,7 +372,6 @@ class ChatExporterGUI:
     # ========== 程序切换 ==========
 
     def _select_app(self, adapter):
-        # 更新按钮高亮
         for name, btn in self.app_buttons.items():
             border = self.app_status_labels.get(name)
             if name == adapter.name:
@@ -385,25 +387,154 @@ class ChatExporterGUI:
                 if border:
                     border.configure(bg=self.COLOR_BORDER)
 
-        # 清空预览
         self.selected_conv = None
         self.preview_title_label.config(text="")
         self._show_preview_placeholder()
-
-        # 清空对话列表，显示加载中
         self._show_center_loading(f"正在加载 {adapter.display_name} 的对话列表...")
 
         self.current_adapter = adapter
+        self._update_app_actions()
         self._load_generation += 1
         self._load_conversations(self._load_generation)
 
+    def _update_app_actions(self):
+        if not self.trae_key_button:
+            return
+        is_trae = bool(self.current_adapter and getattr(self.current_adapter, "name", "") == "trae")
+        self.trae_key_button.configure(state=tk.NORMAL if is_trae and not self._key_extract_running else tk.DISABLED)
+
     def _show_center_loading(self, text: str):
-        """在对话列表区域显示加载提示（不遮挡其他面板）"""
         self._tree_conv_map.clear()
         for item in self.conv_tree.get_children():
             self.conv_tree.delete(item)
         self.conv_tree.insert("", tk.END, iid="__loading__", values=(text, "", ""))
         self._set_status(text)
+
+    # ========== TRAE 密钥助手 ==========
+
+    def _extract_trae_key(self):
+        adapter = self.current_adapter
+        if not adapter or getattr(adapter, "name", "") != "trae":
+            messagebox.showwarning("提示", "请先在左侧选择 TRAE SOLO CN")
+            return
+        if self._key_extract_running:
+            return
+
+        confirm = messagebox.askyesno(
+            "提取 TRAE 密钥",
+            "将只在本机读取正在运行的 TRAE 进程内存，用于提取你自己的本地 SQLCipher 密钥。\n\n"
+            "请先打开 TRAE SOLO CN 并进入任意对话窗口。扫描有 8 秒上限，不会上传数据。\n\n"
+            "是否开始？"
+        )
+        if not confirm:
+            return
+
+        self._key_extract_running = True
+        self._update_app_actions()
+        self._set_busy_progress(True)
+        self._set_status("正在准备提取 TRAE 密钥...")
+
+        def progress_cb(event: dict):
+            msg = event.get("message", "正在提取 TRAE 密钥...")
+            self.root.after(0, lambda m=msg: self._set_status(m))
+
+        def worker():
+            try:
+                result = adapter.extract_key_for_user(progress_callback=progress_cb)
+            except Exception as e:
+                result = {"ok": False, "reason": str(e)}
+            self.root.after(0, lambda r=result: self._on_trae_key_extract_done(r))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_trae_key_extract_done(self, result: dict):
+        self._key_extract_running = False
+        self._update_app_actions()
+        self._set_busy_progress(False)
+
+        if not result.get("ok"):
+            reason = result.get("reason", "未找到可用密钥")
+            hint = result.get("hint", "请确认 TRAE 已运行，再重新点击“提取 TRAE 密钥”。")
+            elapsed = result.get("elapsed")
+            suffix = f"\n\n耗时：{elapsed}s" if elapsed is not None else ""
+            messagebox.showwarning("提取失败", f"{reason}\n\n{hint}{suffix}")
+            self._set_status(f"TRAE 密钥提取失败: {reason}")
+            return
+
+        key_hex = result.get("key_hex", "")
+        source = result.get("source", "未知")
+        elapsed = result.get("elapsed", "")
+        self._set_status(f"TRAE 密钥已获取（来源：{source}，耗时 {elapsed}s），正在重新加载数据库...")
+
+        adapter = self.current_adapter
+        if adapter and getattr(adapter, "name", "") == "trae" and hasattr(adapter, "reset_runtime_cache"):
+            adapter.reset_runtime_cache()
+            self._load_generation += 1
+            self._show_center_loading("密钥已获取，正在重新加载 TRAE 数据库...")
+            self._load_conversations(self._load_generation)
+
+        self._show_trae_key_dialog(key_hex, source, elapsed)
+
+    def _show_trae_key_dialog(self, key_hex: str, source: str, elapsed):
+        win = tk.Toplevel(self.root)
+        win.title("TRAE 密钥已获取")
+        win.geometry("720x260")
+        win.transient(self.root)
+        win.grab_set()
+        win.configure(bg=self.COLOR_BG)
+
+        frame = ttk.Frame(win, padding=16)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(frame, text="TRAE SQLCipher 密钥已获取", style="Title.TLabel").pack(anchor=tk.W)
+        ttk.Label(frame, text=f"来源：{source} · 耗时：{elapsed}s · 已写入本地缓存，后续可直接解密。",
+                  style="Status.TLabel").pack(anchor=tk.W, pady=(4, 12))
+        ttk.Label(frame, text="密钥：", style="Status.TLabel").pack(anchor=tk.W)
+
+        key_var = tk.StringVar(value=key_hex)
+        entry = ttk.Entry(frame, textvariable=key_var, width=92, show="*")
+        entry.pack(fill=tk.X, pady=(4, 8))
+        entry.configure(state="readonly")
+
+        show_var = tk.BooleanVar(value=False)
+
+        def toggle_show():
+            entry.configure(show="" if show_var.get() else "*")
+
+        ttk.Checkbutton(frame, text="显示密钥", variable=show_var, command=toggle_show).pack(anchor=tk.W)
+
+        note = (
+            "建议：普通用户不需要手动保存；程序已本地缓存。若希望以后命令行也直接解密，可写入用户环境变量。"
+        )
+        ttk.Label(frame, text=note, style="Status.TLabel", wraplength=660).pack(anchor=tk.W, pady=(8, 12))
+
+        btns = ttk.Frame(frame)
+        btns.pack(fill=tk.X)
+
+        def copy_key():
+            self.root.clipboard_clear()
+            self.root.clipboard_append(key_hex)
+            self.root.update_idletasks()
+            messagebox.showinfo("已复制", "密钥已复制到剪贴板。")
+
+        def set_env():
+            os.environ[SQLCIPHER_KEY_ENV] = key_hex
+            if os.name != "nt":
+                messagebox.showinfo("已设置当前进程", "已写入当前进程环境变量。非 Windows 系统请手动写入 shell profile。")
+                return
+            try:
+                subprocess.run(["setx", SQLCIPHER_KEY_ENV, key_hex], check=True,
+                               capture_output=True, text=True, timeout=10)
+                messagebox.showinfo(
+                    "已写入环境变量",
+                    "已写入用户环境变量。新打开的终端/程序会自动读取；当前程序也已立即生效。"
+                )
+            except Exception as e:
+                messagebox.showerror("写入失败", f"setx 写入失败：{e}\n\n你仍可以点击“复制密钥”后手动设置。")
+
+        ttk.Button(btns, text="复制密钥", command=copy_key).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btns, text="写入环境变量", command=set_env).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btns, text="关闭", command=win.destroy).pack(side=tk.RIGHT)
 
     # ========== 对话列表加载 ==========
 
@@ -583,7 +714,6 @@ class ChatExporterGUI:
         return text
 
     def _render_colored_preview(self, conv: Conversation):
-        # 元数据头部
         meta_lines = [
             f"# {conv.title}",
             "",
@@ -627,7 +757,6 @@ class ChatExporterGUI:
                     if not self._preview_insert(self._preview_part(part.tool_output or part.content or "") + "\n\n", "tool_body"):
                         return
                 elif ptype == "thinking":
-                    # 默认展示思考过程，不再提供关闭开关。
                     if not self._preview_insert("**思考过程**\n", "system_header"):
                         return
                     if not self._preview_insert(self._preview_part(part.content or "") + "\n\n", "system_body"):
