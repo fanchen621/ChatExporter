@@ -158,8 +158,43 @@ class TraeAdapter(BaseAdapter):
 
         return tmp_path
 
+    def _get_key_cache_path(self) -> str:
+        """密钥缓存文件路径"""
+        import tempfile
+        return os.path.join(tempfile.gettempdir(), "trae_sqlcipher_key.cache")
+
+    def _load_cached_key(self) -> Optional[bytes]:
+        """从缓存文件读取此前成功提取的密钥"""
+        cache_path = self._get_key_cache_path()
+        if not os.path.exists(cache_path):
+            return None
+        try:
+            with open(cache_path, "rb") as f:
+                raw = f.read(56)  # 32B key + hex header
+            if raw[:8] == b"TRAEKEY:":
+                key = bytes.fromhex(raw[8:].decode("ascii"))
+                if len(key) == 32:
+                    return key
+        except Exception:
+            pass
+        return None
+
+    def _save_key_cache(self, key: bytes):
+        """缓存成功提取的密钥到临时文件"""
+        cache_path = self._get_key_cache_path()
+        try:
+            with open(cache_path, "wb") as f:
+                f.write(b"TRAEKEY:" + key.hex().encode("ascii"))
+        except Exception:
+            pass
+
     def _extract_key_from_memory(self) -> Optional[bytes]:
-        """从运行中的 TRAE 进程内存中提取 SQLCipher 密钥（有界扫描）"""
+        """从运行中的 TRAE 进程内存中提取 SQLCipher 密钥（极致优化版）"""
+        # 第一步：命中缓存直接返回（秒级）
+        cached = self._load_cached_key()
+        if cached:
+            return cached
+
         try:
             import ctypes
             import ctypes.wintypes as wt
@@ -172,6 +207,7 @@ class TraeAdapter(BaseAdapter):
         PROCESS_QUERY_INFORMATION = 0x0400
         PROCESS_VM_READ = 0x0010
         MEM_COMMIT = 0x1000
+        MEM_PRIVATE = 0x20000       # 堆/栈/私有数据 —— 密钥最可能在这里
         PAGE_READWRITE = 0x04
         PAGE_WRITECOPY = 0x08
         PAGE_EXECUTE_READWRITE = 0x40
@@ -266,19 +302,29 @@ class TraeAdapter(BaseAdapter):
                 return False
 
         def is_high_entropy(data):
+            # 快速拒绝：前 4 字节相同 → 大概率是填充/模式
             if data[0] == data[1] == data[2] == data[3]:
                 return False
+            # 全 ASCII 可打印 → 不是密钥
             if all(0x20 <= b <= 0x7e for b in data[:16]):
                 return False
+            # 太多 0x00 或 0xFF → 空/填充区域
             if data.count(0) > 28 or data.count(0xFF) > 28:
                 return False
+            # 低熵：字节种类太少
             return len(set(data[:16])) >= 8
 
-        # 有界扫描：最多扫描 MEMORY_SCAN_TIMEOUT_SEC 秒 / MEMORY_SCAN_MAX_BYTES 字节
+        # === 极致优化扫描策略 ===
+        # 1. 只扫描 MEM_PRIVATE 区域（堆/栈/私有数据）
+        # 2. 跳过 0x00000000-0x00010000（低地址，不可能有密钥）
+        # 3. 1MB chunk 读取，减少单次 ReadProcessMemory 耗时
+        # 4. 8 秒超时 + 300MB 上限兜底
         mbi = MEMORY_BASIC_INFORMATION()
         mbi_size = ctypes.sizeof(mbi)
         start_time = time.monotonic()
         total_scanned = 0
+        MIN_ADDR = 0x10000
+        CHUNK_SIZE = 1 * 1024 * 1024  # 1MB
 
         for pid in pids:
             if time.monotonic() - start_time > MEMORY_SCAN_TIMEOUT_SEC:
@@ -290,7 +336,7 @@ class TraeAdapter(BaseAdapter):
             if not hProcess:
                 continue
 
-            address = 0
+            address = MIN_ADDR
             while address < 0x7FFFFFFFFFFF:
                 if time.monotonic() - start_time > MEMORY_SCAN_TIMEOUT_SEC:
                     break
@@ -306,16 +352,19 @@ class TraeAdapter(BaseAdapter):
                 if size == 0:
                     break
 
-                if mbi.State == MEM_COMMIT and mbi.Protect in READABLE:
-                    # 限制单次读取块大小，避免读超大区域
-                    chunk_max = 4 * 1024 * 1024  # 4MB chunks
-                    for off in range(0, size, chunk_max):
+                # 只扫描私有内存（堆/栈），跳过映射文件（MEM_MAPPED）和镜像（MEM_IMAGE）
+                is_private = (mbi.Type == MEM_PRIVATE)
+                is_committed = (mbi.State == MEM_COMMIT)
+                is_readable = (mbi.Protect in READABLE)
+
+                if is_committed and is_readable and is_private:
+                    for off in range(0, size, CHUNK_SIZE):
                         if time.monotonic() - start_time > MEMORY_SCAN_TIMEOUT_SEC:
                             break
                         if total_scanned >= MEMORY_SCAN_MAX_BYTES:
                             break
 
-                        rs = min(chunk_max, size - off)
+                        rs = min(CHUNK_SIZE, size - off)
                         data = read_mem(hProcess, base + off, rs)
                         if data:
                             total_scanned += len(data)
@@ -325,6 +374,8 @@ class TraeAdapter(BaseAdapter):
                                     continue
                                 if test_key(cand):
                                     k32.CloseHandle(hProcess)
+                                    # 缓存密钥，下次秒级命中
+                                    self._save_key_cache(cand)
                                     return cand
 
                 nxt = base + size
