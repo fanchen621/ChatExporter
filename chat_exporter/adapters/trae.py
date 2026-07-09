@@ -8,7 +8,7 @@ import struct
 import tempfile
 import time
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .base import BaseAdapter
 from ..models import AppInfo, Conversation, Message, MessagePart, MessagePartType, Role
@@ -18,8 +18,9 @@ from ..models import AppInfo, Conversation, Message, MessagePart, MessagePartTyp
 # 设置方式: setx TRAE_SQLCIPHER_KEY <your_key_hex>
 SQLCIPHER_KEY_ENV = "TRAE_SQLCIPHER_KEY"
 
-# 默认不自动扫进程内存：无密钥时必须快速回退，避免用户点击 TRAE 后卡 8 秒。
-# 如确需自动提取，可手动设置: setx TRAE_ENABLE_MEMORY_SCAN 1
+# 默认不自动扫进程内存：无密钥时必须快速回退，避免用户点击 TRAE 后卡顿。
+# GUI 里的“提取 TRAE 密钥”按钮会显式触发一次授权扫描，不需要设置此变量。
+# 如需命令行/无界面自动扫描，可手动设置: setx TRAE_ENABLE_MEMORY_SCAN 1
 MEMORY_SCAN_ENV = "TRAE_ENABLE_MEMORY_SCAN"
 
 # 缓存策略：默认允许读取/写入本工具缓存，但缓存会按数据库指纹校验，避免旧 key 误用。
@@ -37,6 +38,7 @@ MEMORY_SCAN_TIMEOUT_SEC = 8
 MEMORY_SCAN_MAX_BYTES = 300 * 1024 * 1024
 LOG_MAX_FILES = 5
 LOG_TAIL_BYTES = 5 * 1024 * 1024
+ProgressCallback = Optional[Callable[[Dict[str, Any]], None]]
 
 
 class TraeAdapter(BaseAdapter):
@@ -67,6 +69,82 @@ class TraeAdapter(BaseAdapter):
             data_path=self.app_dir if available else None,
             conversation_count=0,
         )
+
+    # ========== 用户显式密钥助手 ==========
+
+    def extract_key_for_user(self, progress_callback: ProgressCallback = None) -> Dict[str, Any]:
+        """显式为 GUI 按钮服务的 TRAE 密钥提取流程。
+
+        这个方法只在用户点击“提取 TRAE 密钥”后调用。它会先复用环境变量/缓存，
+        再进行有界内存扫描；成功后只写入本地缓存，不上传、不写仓库。
+        """
+        started = time.monotonic()
+
+        def report(stage: str, message: str, **extra):
+            if not progress_callback:
+                return
+            payload = {"stage": stage, "message": message}
+            payload.update(extra)
+            try:
+                progress_callback(payload)
+            except Exception:
+                pass
+
+        if not os.path.exists(self.encrypted_db_path):
+            return {
+                "ok": False,
+                "reason": "TRAE 加密数据库不存在",
+                "hint": self.encrypted_db_path,
+                "elapsed": round(time.monotonic() - started, 3),
+            }
+
+        env_key = self._load_env_key()
+        if env_key and self._validate_key(env_key):
+            self._save_key_cache(env_key)
+            return self._key_success(env_key, "环境变量", started)
+
+        cached_key = self._load_cached_key()
+        if cached_key and self._validate_key(cached_key):
+            return self._key_success(cached_key, "本地缓存", started)
+
+        if cached_key:
+            self._delete_key_cache()
+
+        if os.name != "nt":
+            return {
+                "ok": False,
+                "reason": "自动内存扫描目前只支持 Windows",
+                "elapsed": round(time.monotonic() - started, 3),
+            }
+
+        report("prepare", "准备扫描 TRAE 进程内存，请保持 TRAE 正在运行...")
+        runtime_key = self._extract_key_from_memory(progress_callback=progress_callback)
+        if runtime_key and self._validate_key(runtime_key):
+            self._save_key_cache(runtime_key)
+            return self._key_success(runtime_key, "内存扫描", started)
+
+        return {
+            "ok": False,
+            "reason": "没有在 TRAE 进程内存中找到可用密钥",
+            "hint": "请确认 TRAE SOLO CN 已启动并打开过至少一个对话；如仍失败，可手动设置 TRAE_SQLCIPHER_KEY。",
+            "elapsed": round(time.monotonic() - started, 3),
+        }
+
+    @staticmethod
+    def _key_success(key: bytes, source: str, started: float) -> Dict[str, Any]:
+        return {
+            "ok": True,
+            "key_hex": key.hex(),
+            "source": source,
+            "elapsed": round(time.monotonic() - started, 3),
+        }
+
+    def reset_runtime_cache(self):
+        """密钥变化后让下一次读取重新走解密路径。"""
+        self._cached_conversations = None
+        self._decrypted_db_path = None
+        self._decryption_attempted = False
+        self._conversations_from_logs = {}
 
     # ========== SQLCipher 解密 ==========
 
@@ -145,8 +223,48 @@ class TraeAdapter(BaseAdapter):
     def _key_cache_enabled(self) -> bool:
         return self._env_truthy(KEY_CACHE_ENV, default=True)
 
-    def _try_decrypt(self, key: bytes) -> Optional[str]:
+    def _validate_key(self, key: bytes) -> bool:
+        """只解密第一页快速校验 key，避免为了“获取 key”而先全库解密。"""
         if not key or len(key) != 32:
+            return False
+
+        try:
+            from cryptography.hazmat.backends import default_backend
+            from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+        except ImportError:
+            return False
+
+        try:
+            with open(self.encrypted_db_path, "rb") as f:
+                page1 = f.read(PAGE_SIZE)
+        except OSError:
+            return False
+        if len(page1) < PAGE_SIZE:
+            return False
+
+        iv = page1[IV_OFFSET:IV_OFFSET + 16]
+        ciphertext = page1[16:USABLE_SIZE]
+
+        try:
+            cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
+            dec = cipher.decryptor()
+            decrypted = dec.update(ciphertext) + dec.finalize()
+            ps = struct.unpack(">H", decrypted[:2])[0]
+        except Exception:
+            return False
+
+        if ps == 1:
+            ps = 65536
+        return (
+            ps == PAGE_SIZE
+            and decrypted[4] == RESERVE
+            and decrypted[5] == 64
+            and decrypted[6] == 32
+            and decrypted[7] == 32
+        )
+
+    def _try_decrypt(self, key: bytes) -> Optional[str]:
+        if not self._validate_key(key):
             return None
 
         try:
@@ -163,38 +281,6 @@ class TraeAdapter(BaseAdapter):
             return None
 
         num_pages = db_size // PAGE_SIZE
-
-        try:
-            with open(self.encrypted_db_path, "rb") as f:
-                page1 = f.read(PAGE_SIZE)
-        except OSError:
-            return None
-        if len(page1) < PAGE_SIZE:
-            return None
-
-        iv = page1[IV_OFFSET:IV_OFFSET + 16]
-        ciphertext = page1[16:USABLE_SIZE]
-
-        try:
-            cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
-            dec = cipher.decryptor()
-            decrypted = dec.update(ciphertext) + dec.finalize()
-        except Exception:
-            return None
-
-        try:
-            ps = struct.unpack(">H", decrypted[:2])[0]
-        except struct.error:
-            return None
-        if ps == 1:
-            ps = 65536
-        if ps != PAGE_SIZE:
-            return None
-        if decrypted[4] != RESERVE:
-            return None
-        if decrypted[5] != 64 or decrypted[6] != 32 or decrypted[7] != 32:
-            return None
-
         tmp_dir = tempfile.mkdtemp(prefix="trae_decrypt_")
         tmp_path = os.path.join(tmp_dir, "database_decrypted.db")
 
@@ -295,7 +381,7 @@ class TraeAdapter(BaseAdapter):
 
     # ========== 可选内存扫描 ==========
 
-    def _extract_key_from_memory(self) -> Optional[bytes]:
+    def _extract_key_from_memory(self, progress_callback: ProgressCallback = None) -> Optional[bytes]:
         try:
             import ctypes.wintypes as wt
         except ImportError:
@@ -303,6 +389,16 @@ class TraeAdapter(BaseAdapter):
 
         if os.name != "nt":
             return None
+
+        def report(stage: str, message: str, **extra):
+            if not progress_callback:
+                return
+            payload = {"stage": stage, "message": message}
+            payload.update(extra)
+            try:
+                progress_callback(payload)
+            except Exception:
+                pass
 
         PROCESS_QUERY_INFORMATION = 0x0400
         PROCESS_VM_READ = 0x0010
@@ -377,7 +473,10 @@ class TraeAdapter(BaseAdapter):
 
         pids = self._find_trae_pids(k32, PROCESSENTRY32)
         if not pids:
+            report("no_process", "没有找到正在运行的 TRAE 进程")
             return None
+
+        report("processes", f"发现 {len(pids)} 个 TRAE 相关进程，开始有界扫描...", pids=pids)
 
         try:
             with open(self.encrypted_db_path, "rb") as f:
@@ -425,6 +524,7 @@ class TraeAdapter(BaseAdapter):
         mbi_size = ctypes.sizeof(mbi)
         start_time = time.monotonic()
         total_scanned = 0
+        last_report_mb = -1
         min_addr = 0x10000
         chunk_size = 1 * 1024 * 1024
 
@@ -432,6 +532,7 @@ class TraeAdapter(BaseAdapter):
             if time.monotonic() - start_time > MEMORY_SCAN_TIMEOUT_SEC or total_scanned >= MEMORY_SCAN_MAX_BYTES:
                 break
 
+            report("scan_pid", f"正在扫描进程 PID {pid}...", pid=pid)
             h_process = k32.OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, False, pid)
             if not h_process:
                 continue
@@ -467,15 +568,23 @@ class TraeAdapter(BaseAdapter):
                             if not data:
                                 continue
                             total_scanned += len(data)
+                            scanned_mb = total_scanned // (1024 * 1024)
+                            if scanned_mb // 16 != last_report_mb // 16:
+                                last_report_mb = scanned_mb
+                                report("progress", f"已扫描约 {scanned_mb}MB，继续查找密钥...", scanned_mb=scanned_mb)
 
+                            # 兼容 64 字符 hex key。
                             for match in re.finditer(rb"[0-9a-fA-F]{64}", data):
                                 candidate = self._parse_key_hex(match.group(0).decode("ascii", errors="ignore"))
                                 if candidate and test_key(candidate):
+                                    report("found", "已找到 TRAE 密钥")
                                     return candidate
 
+                            # 兼容 32B raw key。
                             for o in range(0, len(data) - 32, 16):
                                 candidate = data[o:o + 32]
                                 if is_high_entropy(candidate) and test_key(candidate):
+                                    report("found", "已找到 TRAE 密钥")
                                     return candidate
 
                     nxt = base + size
@@ -485,11 +594,11 @@ class TraeAdapter(BaseAdapter):
             finally:
                 k32.CloseHandle(h_process)
 
+        report("not_found", "扫描结束，未找到可用密钥")
         return None
 
     @staticmethod
     def _find_trae_pids(k32, process_entry_type) -> List[int]:
-        import ctypes.wintypes as wt
         TH32CS_SNAPPROCESS = 0x00000002
         snap = k32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
         if not snap or snap == ctypes.c_void_p(-1).value:
