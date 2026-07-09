@@ -21,19 +21,12 @@ class QClawAdapter(BaseAdapter):
 
     def get_app_info(self) -> AppInfo:
         available = self.detect()
-        conv_count = 0
-        if available:
-            try:
-                convs = self.list_conversations()
-                conv_count = len(convs)
-            except Exception:
-                pass
         return AppInfo(
             name=self.name,
             display_name=self.display_name,
             is_available=available,
             data_path=self.db_path if available else None,
-            conversation_count=conv_count
+            conversation_count=0
         )
 
     def list_conversations(self) -> List[Conversation]:

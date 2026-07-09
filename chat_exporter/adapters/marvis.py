@@ -53,24 +53,24 @@ class MarvisAdapter(BaseAdapter):
         return best_db
 
     def detect(self) -> bool:
-        self._db_path = self._find_db()
-        return self._db_path is not None
+        if not os.path.exists(self.base_dir):
+            return False
+        for user_dir in os.listdir(self.base_dir):
+            user_path = os.path.join(self.base_dir, user_dir)
+            db_path = os.path.join(user_path, "database", "data.db")
+            if os.path.exists(db_path):
+                self._db_path = db_path
+                return True
+        return False
 
     def get_app_info(self) -> AppInfo:
         available = self.detect()
-        conv_count = 0
-        if available:
-            try:
-                convs = self.list_conversations()
-                conv_count = len(convs)
-            except Exception:
-                pass
         return AppInfo(
             name=self.name,
             display_name=self.display_name,
             is_available=available,
             data_path=self._db_path if available else None,
-            conversation_count=conv_count
+            conversation_count=0
         )
 
     def list_conversations(self) -> List[Conversation]:
