@@ -1,8 +1,6 @@
 import json
 import os
-import shutil
 import sqlite3
-import tempfile
 from pathlib import Path
 from typing import List, Optional
 
@@ -21,36 +19,47 @@ class MarvisAdapter(BaseAdapter):
         self._cached_conversations = None
 
     def _find_db(self) -> Optional[str]:
+        """在所有 Marvis 用户库里选对话数最多的那个。
+
+        直接以只读方式打开真实路径（带 busy_timeout），避免在 Marvis 运行占用文件时
+        用 shutil.copy2 拷贝失败、从而把真正有数据的账号库静默丢弃、只剩空占位库
+        (default_user) 导致界面显示 0 个对话的问题。
+        """
         if not os.path.exists(self.base_dir):
             return None
-        best_db = None
+        best_db = None          # 对话数最多的库
         best_count = -1
+        fallback_db = None      # 当且仅当所有库都打不开时的兜底
         for user_dir in os.listdir(self.base_dir):
             user_path = os.path.join(self.base_dir, user_dir)
             db_path = os.path.join(user_path, "database", "data.db")
             if not os.path.exists(db_path):
                 continue
             try:
-                tmp_dir = tempfile.mkdtemp(prefix="marvis_check_")
-                tmp_db = os.path.join(tmp_dir, "data.db")
-                shutil.copy2(db_path, tmp_db)
-                conn = sqlite3.connect(tmp_db)
+                conn = sqlite3.connect(
+                    f"file:{db_path}?mode=ro", uri=True, timeout=8
+                )
+                conn.execute("PRAGMA busy_timeout=8000")
                 cursor = conn.cursor()
                 cursor.execute("SELECT COUNT(*) FROM conversations")
                 count = cursor.fetchone()[0]
                 conn.close()
-                try:
-                    os.unlink(tmp_db)
-                    os.rmdir(tmp_dir)
-                except Exception:
-                    pass
-                if count > best_count:
+                # 对话数相同时，优先选非 default_user 的账号库
+                if count > best_count or (
+                    count == best_count and best_count >= 0
+                    and "default_user" not in db_path
+                    and (best_db is None or "default_user" in best_db)
+                ):
                     best_count = count
                     best_db = db_path
+                if fallback_db is None:
+                    fallback_db = db_path
             except Exception:
-                if best_db is None:
-                    best_db = db_path
-        return best_db
+                # 打不开/被锁：不要让它覆盖已找到的有数据库
+                if fallback_db is None:
+                    fallback_db = db_path
+                continue
+        return best_db if best_db is not None else fallback_db
 
     def detect(self) -> bool:
         if not os.path.exists(self.base_dir):
