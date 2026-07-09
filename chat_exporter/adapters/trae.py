@@ -48,24 +48,12 @@ class TraeAdapter(BaseAdapter):
 
     def get_app_info(self) -> AppInfo:
         available = self.detect()
-        conv_count = 0
-        note = ""
-        if available:
-            try:
-                convs = self.list_conversations()
-                conv_count = len(convs)
-                if self._decrypted_db_path:
-                    note = " (数据库解密)"
-                elif self._decryption_failed:
-                    note = " (从日志解析)"
-            except Exception:
-                pass
         return AppInfo(
             name=self.name,
-            display_name=self.display_name + note,
+            display_name=self.display_name,
             is_available=available,
             data_path=self.app_dir if available else None,
-            conversation_count=conv_count
+            conversation_count=0
         )
 
     # ========== SQLCipher 解密 ==========

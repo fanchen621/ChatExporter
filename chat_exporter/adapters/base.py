@@ -41,12 +41,12 @@ class BaseAdapter(ABC):
         shutil.copy2(db_path, tmp_path)
         return tmp_path
 
-    def _connect_db(self, db_path: str, copy: bool = True) -> sqlite3.Connection:
+    def _connect_db(self, db_path: str, copy: bool = False) -> sqlite3.Connection:
         if copy:
             actual_path = self._safe_copy_db(db_path)
+            conn = sqlite3.connect(actual_path)
         else:
-            actual_path = db_path
-        conn = sqlite3.connect(actual_path)
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
         return conn
 
