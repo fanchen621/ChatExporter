@@ -5,6 +5,7 @@
 ## ✨ 特性
 
 - **多程序支持**: TRAE SOLO CN、QoderWork CN、WorkBuddy、QClaw、腾讯 Marvis
+- **TRAE 密钥助手**: 提供显式按钮，在用户确认后从本机 TRAE 进程中尝试提取 SQLCipher 密钥
 - **智能标题**: 自动清洗无效标题，过滤部分 QClaw 内部 memory/dream diary 噪声
 - **完整导出**: 默认包含文本、思考过程、工具调用、代码块等内容类型
 - **轻量界面**: 对话列表分批渲染；预览大对话时自动截断预览但不影响真实导出
@@ -59,31 +60,41 @@ python build_exe.py
 
 ### TRAE SOLO CN 特殊配置
 
-TRAE SOLO CN 使用 SQLCipher 加密数据库，启动程序时需要提供解密密钥。本工具支持两种方式：
+TRAE SOLO CN 使用 SQLCipher 加密数据库。完整导出需要 SQLCipher 密钥。本工具支持三种方式：
 
-#### 方式一：自动从内存提取（推荐）
+#### 方式一：点击「提取 TRAE 密钥」（推荐给普通用户）
 
-1. 启动 TRAE SOLO CN
-2. 直接运行 ChatExporter
-3. 程序会自动扫描 TRAE 进程内存，提取 SQLCipher 密钥
+1. 启动 TRAE SOLO CN，并打开任意一个对话窗口
+2. 启动 ChatExporter，左侧选择「TRAE SOLO CN」
+3. 点击中间底部的「提取 TRAE 密钥」
+4. 确认授权后，程序会在本机有界扫描 TRAE 进程内存
+5. 成功后会自动写入本地缓存，并重新加载 TRAE 数据库
+6. 弹窗中可以选择「复制密钥」或「写入环境变量」
+
+这个流程是显式触发的：程序不会在你没有点击按钮时自动读取进程内存。
 
 #### 方式二：手动配置环境变量
 
 如果你知道密钥，可以设置为环境变量：
 
 ```bash
-# Windows PowerShell
+# Windows PowerShell，仅当前窗口有效
 $env:TRAE_SQLCIPHER_KEY="<你的SQLCipher密钥>"
 python main.py
 
-# Windows CMD
+# Windows CMD，仅当前窗口有效
 set TRAE_SQLCIPHER_KEY=<你的SQLCipher密钥>
 python main.py
+
+# Windows 持久写入用户环境变量
+setx TRAE_SQLCIPHER_KEY <你的SQLCipher密钥>
 ```
 
-> ⚠️ **安全提示**: 密钥属于敏感信息，请不要上传到任何公开仓库或分享给他人。
+#### 方式三：日志回退模式
 
-如果未配置密钥且无法从内存提取，程序会回退到日志解析模式（功能受限）。
+如果没有密钥，程序会快速回退到日志解析模式。日志模式不会卡顿，但内容可能不如数据库模式完整。
+
+> ⚠️ **安全提示**: 密钥属于敏感信息。请不要上传到公开仓库、Issue、截图或聊天记录中。
 
 ### 导出选项
 
@@ -130,7 +141,7 @@ ChatExporter/
         └── marvis.py       # 腾讯 Marvis
 ```
 
-### 数据库解密原理
+### TRAE 数据库解密原理
 
 TRAE SOLO CN 使用 SQLCipher 4 加密：
 
@@ -141,7 +152,9 @@ TRAE SOLO CN 使用 SQLCipher 4 加密：
 本工具通过以下方式获取解密密钥：
 
 1. **环境变量**: 从 `TRAE_SQLCIPHER_KEY` 读取
-2. **内存提取**: 扫描 TRAE 进程内存，通过熵过滤和 AES-CBC 验证定位密钥
+2. **本地缓存**: 成功提取后保存到用户本地缓存，并用数据库指纹校验
+3. **显式内存提取**: 仅当用户点击「提取 TRAE 密钥」并确认后，扫描 TRAE 进程内存
+4. **日志回退**: 无密钥时快速读取最近日志尾部，避免卡顿
 
 解密后的数据库会保存到临时文件，程序退出后自动清理。
 
@@ -174,10 +187,17 @@ TRAE SOLO CN 使用 SQLCipher 4 加密：
 1. Fork 本仓库
 2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
 3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
+4. 推送到分支
 5. 开启 Pull Request
 
 ## 📝 更新日志
+
+### v1.0.2 (2026-07-09)
+- 新增 TRAE 密钥助手按钮：用户显式确认后扫描本机 TRAE 进程内存
+- 成功提取后自动本地缓存，并可复制密钥或写入用户环境变量
+- 无 key 时默认不扫内存，继续保持快速日志回退
+- 密钥获取前只做第一页快速校验，不为“获取 key”提前全库解密
+- 扫描过程增加状态提示、8 秒上限、300MB 上限和结果弹窗
 
 ### v1.0.1 (2026-07-09)
 - 修复 GUI 卡顿：对话列表分批渲染、搜索防抖、超大预览截断
