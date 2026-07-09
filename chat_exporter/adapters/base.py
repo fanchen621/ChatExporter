@@ -51,10 +51,33 @@ class BaseAdapter(ABC):
         return conn
 
     @staticmethod
-    def _ts_to_dt(ts: Optional[int], ms: bool = True) -> Optional:
+    def _ts_to_dt(ts, ms: bool = True):
         from datetime import datetime
         if ts is None:
             return None
-        if ms:
-            return datetime.fromtimestamp(ts / 1000)
-        return datetime.fromtimestamp(ts)
+        if isinstance(ts, (int, float)):
+            try:
+                return datetime.fromtimestamp(ts / 1000) if ms else datetime.fromtimestamp(ts)
+            except (ValueError, OSError, OverflowError):
+                return None
+        if isinstance(ts, str):
+            s = ts.strip()
+            if not s:
+                return None
+            for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ",
+                        "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S",
+                        "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
+                try:
+                    return datetime.strptime(s, fmt)
+                except ValueError:
+                    continue
+            try:
+                return datetime.fromisoformat(s.replace("Z", "+00:00"))
+            except Exception:
+                pass
+            try:
+                num = float(s)
+                return datetime.fromtimestamp(num / 1000) if ms else datetime.fromtimestamp(num)
+            except (ValueError, OSError, OverflowError):
+                return None
+        return None

@@ -18,9 +18,11 @@ from ..models import AppInfo, Conversation, Message, MessagePart, MessagePartTyp
 # 设置方式: setx TRAE_SQLCIPHER_KEY <your_key_hex>
 SQLCIPHER_KEY_ENV = "TRAE_SQLCIPHER_KEY"
 
-# 默认不自动扫进程内存：无密钥时必须快速回退，避免用户点击 TRAE 后卡顿。
-# GUI 里的“提取 TRAE 密钥”按钮会显式触发一次授权扫描，不需要设置此变量。
-# 如需命令行/无界面自动扫描，可手动设置: setx TRAE_ENABLE_MEMORY_SCAN 1
+# 默认自动扫进程内存：换到别的电脑时，环境变量/缓存里没有 key，
+# 只要 TRAE SOLO CN 正在运行，就自动从进程内存提取本机 SQLCipher 密钥
+# （有界 8s、仅扫描 TRAE 进程、不存在进程则立即返回，不会卡顿）。
+# 若希望完全禁止自动扫描（仅通过 GUI 按钮或环境变量手动提供 key），
+# 可手动设置: setx TRAE_ENABLE_MEMORY_SCAN 0
 MEMORY_SCAN_ENV = "TRAE_ENABLE_MEMORY_SCAN"
 
 # 缓存策略：默认允许读取/写入本工具缓存，但缓存会按数据库指纹校验，避免旧 key 误用。
@@ -218,7 +220,7 @@ class TraeAdapter(BaseAdapter):
         return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
 
     def _memory_scan_enabled(self) -> bool:
-        return self._env_truthy(MEMORY_SCAN_ENV, default=False)
+        return self._env_truthy(MEMORY_SCAN_ENV, default=True)
 
     def _key_cache_enabled(self) -> bool:
         return self._env_truthy(KEY_CACHE_ENV, default=True)
