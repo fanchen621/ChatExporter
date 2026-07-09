@@ -55,22 +55,24 @@ class MarvisAdapter(BaseAdapter):
     def detect(self) -> bool:
         if not os.path.exists(self.base_dir):
             return False
-        for user_dir in os.listdir(self.base_dir):
-            user_path = os.path.join(self.base_dir, user_dir)
-            db_path = os.path.join(user_path, "database", "data.db")
-            if os.path.exists(db_path):
-                self._db_path = db_path
-                return True
-        return False
+        self._db_path = self._find_db()
+        return self._db_path is not None
 
     def get_app_info(self) -> AppInfo:
         available = self.detect()
+        conv_count = 0
+        if available:
+            try:
+                convs = self.list_conversations()
+                conv_count = len(convs)
+            except Exception:
+                pass
         return AppInfo(
             name=self.name,
             display_name=self.display_name,
             is_available=available,
             data_path=self._db_path if available else None,
-            conversation_count=0
+            conversation_count=conv_count
         )
 
     def list_conversations(self) -> List[Conversation]:
@@ -80,46 +82,51 @@ class MarvisAdapter(BaseAdapter):
         if not self.detect():
             return []
 
-        conn = self._connect_db(self._db_path)
-        cursor = conn.cursor()
-
+        conn = None
         try:
+            conn = self._connect_db(self._db_path)
+            cursor = conn.cursor()
+
             cursor.execute("""
-            SELECT
-                c.conversation_id,
-                c.title,
-                c.created_at,
-                c.updated_at,
-                c.status,
-                c.metadata,
-                COUNT(m.message_id) AS msg_count
-            FROM conversations c
-            LEFT JOIN messages m ON c.conversation_id = m.conversation_id
-            GROUP BY c.conversation_id
-            ORDER BY c.updated_at DESC
-        """)
+                SELECT
+                    c.conversation_id,
+                    c.title,
+                    c.created_at,
+                    c.updated_at,
+                    c.status,
+                    c.metadata,
+                    COUNT(m.message_id) AS msg_count
+                FROM conversations c
+                LEFT JOIN messages m ON c.conversation_id = m.conversation_id
+                GROUP BY c.conversation_id
+                ORDER BY c.updated_at DESC
+            """)
+
+            conversations = []
+            for row in cursor.fetchall():
+                # 容错：单行解析失败不影响其他对话展示
+                try:
+                    title = row["title"] or "(无标题对话)"
+                    conv = Conversation(
+                        id=row["conversation_id"],
+                        title=title,
+                        created_at=self._ts_to_dt(row["created_at"], ms=False),
+                        updated_at=self._ts_to_dt(row["updated_at"], ms=False),
+                        source_app=self.display_name,
+                        metadata={
+                            "status": row["status"],
+                            "msg_count": row["msg_count"] or 0,
+                        }
+                    )
+                    conversations.append(conv)
+                except Exception:
+                    continue
         except Exception:
-            conn.close()
             return []
+        finally:
+            if conn:
+                conn.close()
 
-        conversations = []
-        for row in cursor.fetchall():
-            title = row["title"] or "(无标题对话)"
-
-            conv = Conversation(
-                id=row["conversation_id"],
-                title=title,
-                created_at=self._ts_to_dt(row["created_at"], ms=False),
-                updated_at=self._ts_to_dt(row["updated_at"], ms=False),
-                source_app=self.display_name,
-                metadata={
-                    "status": row["status"],
-                    "msg_count": row["msg_count"] or 0,
-                }
-            )
-            conversations.append(conv)
-
-        conn.close()
         self._cached_conversations = conversations
         return conversations
 
