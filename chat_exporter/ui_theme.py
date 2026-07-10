@@ -146,13 +146,13 @@ def configure_styles(root: tk.Tk) -> ttk.Style:
         font=(FONT_UI, 9),
         padding=(13, 8),
         relief="flat",
-        borderwidth=0,
         focusthickness=0,
         focuscolor="none",
     )
     style.configure(
         "Primary.TButton",
         **common_button,
+        borderwidth=0,
         background=Palette.ACCENT,
         foreground="#FFFFFF",
     )
@@ -164,12 +164,9 @@ def configure_styles(root: tk.Tk) -> ttk.Style:
     style.configure(
         "Secondary.TButton",
         **common_button,
+        borderwidth=1,
         background=Palette.SURFACE_ALT,
         foreground=Palette.TEXT_SECONDARY,
-        bordercolor=Palette.BORDER,
-        lightcolor=Palette.BORDER,
-        darkcolor=Palette.BORDER,
-        borderwidth=1,
     )
     style.map(
         "Secondary.TButton",
