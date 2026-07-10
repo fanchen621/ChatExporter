@@ -22,22 +22,105 @@ class WorkBuddyAdapter(BaseAdapter):
         self._cached_conversations = None
         self._find_paths()
 
-    def _find_paths(self):
-        users_dir = os.path.join(self.program_data, "WorkBuddy", "users")
-        if not os.path.exists(users_dir):
-            return
+    def _probe_root(self, wb_dir: str):
+        """Given a candidate .workbuddy dir, return (db_path, projects_dir, sessions_json)
+        if it is a usable WorkBuddy data root, else None.
+        Accepts BOTH layouts:
+          - <root>/workbuddy.db                      (real root: symlink C:\\Users\\<u>\\.workbuddy)
+          - <root>/users/<uid>/.workbuddy/workbuddy.db (legacy %PROGRAMDATA% layout)
+        """
+        if not wb_dir or not os.path.exists(wb_dir):
+            return None
+        # layout A: db directly under root
+        db_a = os.path.join(wb_dir, "workbuddy.db")
+        # layout B: nested users/<uid>/.workbuddy
+        db_b = None
+        users_dir = os.path.join(wb_dir, "users")
+        if os.path.isdir(users_dir):
+            for uid in os.listdir(users_dir):
+                cand = os.path.join(users_dir, uid, ".workbuddy", "workbuddy.db")
+                if os.path.exists(cand):
+                    db_b = cand
+                    break
+        db_path = db_a if os.path.exists(db_a) else db_b
+        if not db_path:
+            return None
+        # resolve projects dir relative to the chosen db's .workbuddy root
+        root_for_db = os.path.dirname(db_path)  # .../.workbuddy
+        projects_dir = os.path.join(root_for_db, "projects")
+        sessions_json = os.path.join(root_for_db, "app", "sessions.json")
+        uid = None
+        # try to derive uid from path (layout B)
+        parts = os.path.normpath(db_path).split(os.sep)
+        if "users" in parts:
+            i = parts.index("users")
+            if i + 1 < len(parts):
+                uid = parts[i + 1]
+        return (db_path, projects_dir, sessions_json, uid)
 
-        for uid in os.listdir(users_dir):
-            wb_dir = os.path.join(users_dir, uid, ".workbuddy")
-            db_path = os.path.join(wb_dir, "workbuddy.db")
-            projects_dir = os.path.join(wb_dir, "projects")
-            sessions_json = os.path.join(wb_dir, "app", "sessions.json")
-            if os.path.exists(db_path):
-                self._user_id = uid
-                self._db_path = db_path
-                self._projects_dir = projects_dir
-                self._sessions_json_path = sessions_json
-                return
+    @staticmethod
+    def _count_sessions_in_db(db_path: str) -> int:
+        try:
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM sessions WHERE deleted_at IS NULL")
+            n = cur.fetchone()[0]
+            conn.close()
+            return n
+        except Exception:
+            return -1
+
+    def _find_paths(self):
+        """Locate the REAL WorkBuddy data root.
+
+        The authoritative root is the one WorkBuddy itself uses as its
+        `configDir` — `C:\\Users\\<user>\\.workbuddy` (which on this
+        machine is a symlink to D:\\UserAssets\\DevTools\\workbuddy).
+        A *stale secondary copy* also exists under
+        %PROGRAMDATA%\\WorkBuddy\\users — it must NOT be used, because it
+        does not contain today's live sessions and caused every prior
+        mismatch. We therefore probe several candidate roots and pick the
+        one whose workbuddy.db actually holds the most live sessions.
+        """
+        home = str(Path.home())
+        candidates = [
+            os.path.join(home, ".workbuddy"),                       # real root (symlink)
+            os.path.join(self.program_data, "WorkBuddy"),           # legacy %PROGRAMDATA% parent
+            os.path.join(self.program_data, "WorkBuddy", "users"),  # legacy users dir
+        ]
+        best = None  # (live_count, db_path, projects_dir, sessions_json, uid)
+        for cand in candidates:
+            if not os.path.exists(cand):
+                continue
+            # cand may be the .workbuddy root itself, or a parent dir
+            probes = []
+            if os.path.basename(cand) == ".workbuddy":
+                probes.append(cand)
+            else:
+                # treat cand as parent: look for nested .workbuddy or users/
+                probes.append(os.path.join(cand, ".workbuddy"))
+                users_dir = os.path.join(cand, "users")
+                if os.path.isdir(users_dir):
+                    for uid in os.listdir(users_dir):
+                        probes.append(os.path.join(users_dir, uid, ".workbuddy"))
+            for wb_dir in probes:
+                res = self._probe_root(wb_dir)
+                if not res:
+                    continue
+                db_path, projects_dir, sessions_json, uid = res
+                n = self._count_sessions_in_db(db_path)
+                if n is None or n < 0:
+                    n = -1
+                # prefer the root with the most live sessions
+                if best is None or n > best[0]:
+                    best = (n, db_path, projects_dir, sessions_json, uid)
+        if best is None:
+            return
+        _, db_path, projects_dir, sessions_json, uid = best
+        self._user_id = uid
+        self._db_path = db_path
+        self._projects_dir = projects_dir
+        self._sessions_json_path = sessions_json
 
     def _cwd_to_slug(self, cwd: str) -> str:
         slug = cwd.replace("\\", "-").replace(":", "").replace("/", "-")
