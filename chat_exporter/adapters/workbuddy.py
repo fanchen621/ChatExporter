@@ -369,30 +369,15 @@ class WorkBuddyAdapter(BaseAdapter):
                 metadata={"cwd": sess_row["cwd"], "jsonl_path": jsonl_path}
             )
 
-        # DB 中没有 → 从 sessions.json + projects 目录加载
-        sessions_meta = self._load_sessions_json()
-        meta = sessions_meta.get(conv_id, {})
-        cwd = meta.get("workDir", "")
-
-        # 搜索 jsonl 文件
-        jsonl_path = self._find_jsonl_path(conv_id, cwd)
-        if not jsonl_path or not os.path.exists(jsonl_path):
-            return None
-
-        messages = self._parse_jsonl(jsonl_path)
-        title = self._extract_title_from_jsonl(jsonl_path)
-        st = os.stat(jsonl_path)
-
-        return Conversation(
-            id=conv_id,
-            title=self._clean_title(title),
-            created_at=self._parse_iso_dt(meta.get("startedAt")) or datetime.fromtimestamp(st.st_ctime),
-            updated_at=self._parse_iso_dt(meta.get("resumedAt")) or datetime.fromtimestamp(st.st_mtime),
-            messages=messages,
-            model="",
-            source_app=self.display_name,
-            metadata={"cwd": cwd, "jsonl_path": jsonl_path, "from_sessions_json": True}
-        )
+        # DB 中没有该会话：在"单一真实数据根"设计下，这表示该会话
+        # 对 WorkBuddy 自身也不可见（已删除 / 孤儿残留），不应再像旧版
+        # "三源合并"那样去 sessions.json 里复活它——那正是之前 dd9b8415
+        # 孤儿会话导致 ChatExporter 与 UI 对不上的根因。直接返回 None，
+        # 保持与 WorkBuddy UI 严格一致。
+        #
+        # 注：旧实现此处调用了未定义的 _load_sessions_json() / _parse_iso_dt()，
+        # 一旦命中会抛 AttributeError。现已移除该死代码。
+        return None
 
     def _parse_jsonl(self, path: str) -> List[Message]:
         messages = []
