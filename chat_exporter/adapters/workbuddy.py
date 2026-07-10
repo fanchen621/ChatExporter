@@ -1,6 +1,7 @@
 import json
 import os
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -91,8 +92,9 @@ class WorkBuddyAdapter(BaseAdapter):
             return []
 
         conversations = []
+        db_ids = set()
         for row in cursor.fetchall():
-            # 统计消息数：只计数可解析的消息记录行
+            db_ids.add(row["id"])
             jsonl_path = self._find_jsonl_path(row["id"], row["cwd"])
             msg_count = self._count_jsonl_messages(jsonl_path)
 
@@ -112,8 +114,111 @@ class WorkBuddyAdapter(BaseAdapter):
             conversations.append(conv)
 
         conn.close()
+
+        # 补充扫描：projects 目录中有 jsonl 但不在 sessions 表中的对话
+        # （WorkBuddy 有时会写入 jsonl 但未同步到 DB，UI 仍会显示）
+        if self._projects_dir and os.path.isdir(self._projects_dir):
+            self._scan_projects_dir(conversations, db_ids)
+
+        # 按更新时间降序排列
+        conversations.sort(key=lambda c: c.updated_at or datetime.min, reverse=True)
+
         self._cached_conversations = conversations
         return conversations
+
+    def _scan_projects_dir(self, conversations: List[Conversation], db_ids: set):
+        """扫描 projects 目录，补充 DB 中缺失的对话。"""
+        for dirname in os.listdir(self._projects_dir):
+            dirpath = os.path.join(self._projects_dir, dirname)
+            if not os.path.isdir(dirpath):
+                continue
+            for fname in os.listdir(dirpath):
+                if not fname.endswith(".jsonl"):
+                    continue
+                sid = fname[:-6]  # strip .jsonl
+                if sid in db_ids:
+                    continue
+                fpath = os.path.join(dirpath, fname)
+                title = self._extract_title_from_jsonl(fpath)
+                msg_count = self._count_jsonl_messages(fpath)
+                st = os.stat(fpath)
+                conv = Conversation(
+                    id=sid,
+                    title=self._clean_title(title),
+                    created_at=datetime.fromtimestamp(st.st_ctime),
+                    updated_at=datetime.fromtimestamp(st.st_mtime),
+                    source_app=self.display_name,
+                    metadata={
+                        "cwd": dirname,
+                        "model": "",
+                        "status": "unknown",
+                        "msg_count": msg_count,
+                        "jsonl_path": fpath,
+                        "from_scan": True,
+                    }
+                )
+                conversations.append(conv)
+
+    @staticmethod
+    def _extract_title_from_jsonl(path: str) -> str:
+        """从 jsonl 文件中提取对话标题。
+
+        取第一条用户消息（role=user），去除 <system-reminder> 块和
+        <user_query> 包装标签，取实际用户问题作为标题。
+        """
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    # 跳过系统记录
+                    rec_type = rec.get("type", "")
+                    if rec_type in ("system", "system-reminder"):
+                        continue
+
+                    # 优先取 title 字段
+                    title = rec.get("title")
+                    if title:
+                        return str(title)
+
+                    # 只取用户消息作为标题（跳过 AI 回复）
+                    role = rec.get("role", "")
+                    if role != "user":
+                        continue
+
+                    # 从 content 中提取文本
+                    content = rec.get("content", "")
+                    if isinstance(content, list):
+                        parts = []
+                        for item in content:
+                            if isinstance(item, dict) and item.get("type") == "input_text":
+                                parts.append(item.get("text", ""))
+                        content = "\n".join(parts)
+                    if not isinstance(content, str) or not content.strip():
+                        continue
+
+                    # 去除 <system-reminder>...</system-reminder> 块
+                    content = re.sub(
+                        r'<system-reminder[^>]*>.*?</system-reminder>',
+                        '', content, flags=re.DOTALL
+                    )
+                    # 去除 <user_query>...</user_query> 包装
+                    content = re.sub(r'<user_query>', '', content)
+                    content = re.sub(r'</user_query>', '', content)
+                    content = content.strip()
+                    if content:
+                        first_line = content.split("\n")[0].strip()
+                        if first_line:
+                            return first_line
+        except Exception:
+            pass
+        return "(无标题对话)"
 
     def _count_jsonl_messages(self, jsonl_path: Optional[str]) -> int:
         """统计 jsonl 文件中的有效消息记录数。
