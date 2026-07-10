@@ -23,11 +23,14 @@ class WorkBuddyAdapter(BaseAdapter):
         self._find_paths()
 
     def _probe_root(self, wb_dir: str):
-        """Given a candidate .workbuddy dir, return (db_path, projects_dir, sessions_json)
-        if it is a usable WorkBuddy data root, else None.
-        Accepts BOTH layouts:
-          - <root>/workbuddy.db                      (real root: symlink C:\\Users\\<u>\\.workbuddy)
-          - <root>/users/<uid>/.workbuddy/workbuddy.db (legacy %PROGRAMDATA% layout)
+        """Given a candidate .workbuddy dir, return (db_path, projects_dir,
+        sessions_json, uid) if it is a usable WorkBuddy data root, else None.
+
+        Accepts BOTH on-disk layouts:
+          - <root>/workbuddy.db                        (real root: ~/WorkBuddy
+            or ~/.workbuddy configDir, may itself be a symlink)
+          - <root>/users/<uid>/.workbuddy/workbuddy.db (legacy
+            %PROGRAMDATA%\\WorkBuddy\\users layout)
         """
         if not wb_dir or not os.path.exists(wb_dir):
             return None
@@ -35,12 +38,14 @@ class WorkBuddyAdapter(BaseAdapter):
         db_a = os.path.join(wb_dir, "workbuddy.db")
         # layout B: nested users/<uid>/.workbuddy
         db_b = None
+        uid_b = None
         users_dir = os.path.join(wb_dir, "users")
         if os.path.isdir(users_dir):
             for uid in os.listdir(users_dir):
                 cand = os.path.join(users_dir, uid, ".workbuddy", "workbuddy.db")
                 if os.path.exists(cand):
                     db_b = cand
+                    uid_b = uid
                     break
         db_path = db_a if os.path.exists(db_a) else db_b
         if not db_path:
@@ -49,46 +54,50 @@ class WorkBuddyAdapter(BaseAdapter):
         root_for_db = os.path.dirname(db_path)  # .../.workbuddy
         projects_dir = os.path.join(root_for_db, "projects")
         sessions_json = os.path.join(root_for_db, "app", "sessions.json")
-        uid = None
-        # try to derive uid from path (layout B)
-        parts = os.path.normpath(db_path).split(os.sep)
-        if "users" in parts:
-            i = parts.index("users")
-            if i + 1 < len(parts):
-                uid = parts[i + 1]
+        uid = uid_b  # (None for layout A)
         return (db_path, projects_dir, sessions_json, uid)
-
-    @staticmethod
-    def _count_sessions_in_db(db_path: str) -> int:
-        try:
-            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-            cur = conn.cursor()
-            cur.execute("SELECT COUNT(*) FROM sessions WHERE deleted_at IS NULL")
-            n = cur.fetchone()[0]
-            conn.close()
-            return n
-        except Exception:
-            return -1
 
     def _find_paths(self):
         """Locate the REAL WorkBuddy data root.
 
-        The authoritative root is the one WorkBuddy itself uses as its
-        `configDir` — `C:\\Users\\<user>\\.workbuddy` (which on this
-        machine is a symlink to D:\\UserAssets\\DevTools\\workbuddy).
-        A *stale secondary copy* also exists under
-        %PROGRAMDATA%\\WorkBuddy\\users — it must NOT be used, because it
-        does not contain today's live sessions and caused every prior
-        mismatch. We therefore probe several candidate roots and pick the
-        one whose workbuddy.db actually holds the most live sessions.
+        ROOT CAUSE OF EVERY PRIOR MISMATCH
+        ---------------------------------
+        The previous implementation hardcoded:
+            users_dir = PROGRAMDATA + "\\WorkBuddy\\users"
+        and only ever looked there. That path is a *stale secondary
+        copy* of WorkBuddy's data. The authoritative data directory is
+        the one WorkBuddy itself reports as its `configDir`:
+            C:\\Users\\<user>\\.workbuddy
+        (on this machine ~/.workbuddy resolves to the live store;
+        WorkBuddy's own repair-helper log prints exactly
+        `configDir=C:\\Users\\黄振飞\\.workbuddy`). The ProgramData copy
+        does NOT contain today's live sessions, so ChatExporter's list
+        could never match the WorkBuddy UI — that is why "问题依旧".
+
+        FIX
+        ---
+        We now enumerate candidate roots in a STRICT PREFERENCE order
+        (most-authoritative first) and stop at the FIRST one that
+        actually contains a workbuddy.db. We deliberately do NOT pick by
+        "which db has more sessions" — the stale ProgramData copy can
+        legitimately have MORE rows (e.g. it still carries an orphan
+        session) while being the WRONG store. Preference order:
+
+          1. <HOME>/WorkBuddy          (WorkBuddy's real default data dir)
+          2. <HOME>/.workbuddy       (WorkBuddy configDir; may be a
+                                          symlink to the live store)
+          3. %PROGRAMDATA%\\WorkBuddy  (legacy fallback only)
+
+        Each candidate is probed for both the modern flat layout and the
+        legacy users/<uid> nested layout.
         """
         home = str(Path.home())
+        # strict preference: real roots first, legacy last
         candidates = [
-            os.path.join(home, ".workbuddy"),                       # real root (symlink)
-            os.path.join(self.program_data, "WorkBuddy"),           # legacy %PROGRAMDATA% parent
-            os.path.join(self.program_data, "WorkBuddy", "users"),  # legacy users dir
+            os.path.join(home, "WorkBuddy"),
+            os.path.join(home, ".workbuddy"),
+            os.path.join(self.program_data, "WorkBuddy"),
         ]
-        best = None  # (live_count, db_path, projects_dir, sessions_json, uid)
         for cand in candidates:
             if not os.path.exists(cand):
                 continue
@@ -97,7 +106,6 @@ class WorkBuddyAdapter(BaseAdapter):
             if os.path.basename(cand) == ".workbuddy":
                 probes.append(cand)
             else:
-                # treat cand as parent: look for nested .workbuddy or users/
                 probes.append(os.path.join(cand, ".workbuddy"))
                 users_dir = os.path.join(cand, "users")
                 if os.path.isdir(users_dir):
@@ -108,19 +116,12 @@ class WorkBuddyAdapter(BaseAdapter):
                 if not res:
                     continue
                 db_path, projects_dir, sessions_json, uid = res
-                n = self._count_sessions_in_db(db_path)
-                if n is None or n < 0:
-                    n = -1
-                # prefer the root with the most live sessions
-                if best is None or n > best[0]:
-                    best = (n, db_path, projects_dir, sessions_json, uid)
-        if best is None:
-            return
-        _, db_path, projects_dir, sessions_json, uid = best
-        self._user_id = uid
-        self._db_path = db_path
-        self._projects_dir = projects_dir
-        self._sessions_json_path = sessions_json
+                # FIRST valid root in preference order wins — stop immediately
+                self._user_id = uid
+                self._db_path = db_path
+                self._projects_dir = projects_dir
+                self._sessions_json_path = sessions_json
+                return
 
     def _cwd_to_slug(self, cwd: str) -> str:
         slug = cwd.replace("\\", "-").replace(":", "").replace("/", "-")
