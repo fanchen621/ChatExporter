@@ -75,15 +75,21 @@ class WorkBuddyAdapter(BaseAdapter):
         )
 
     def list_conversations(self) -> List[Conversation]:
+        """列出 WorkBuddy 全部对话。
+
+        与 WorkBuddy 自身 UI 保持完全一致：数据源为 workbuddy.db 的
+        `sessions` 表（deleted_at IS NULL），按 updated_at DESC 排序。
+        WorkBuddy 渲染端通过 client.sessions.list() -> UnifiedDB.getSessions
+        读取的正是这张表，因此 ChatExporter 直接复用同一规则即可保证两边
+        显示完全相同。修复前旧逻辑把 sessions.json / projects 目录里残留的
+        孤儿会话（如迁移时掉落的 dd9b8415）也并入，反而导致 ChatExporter
+        比 WorkBuddy 多出一条、两边对不上。
+        """
         if self._cached_conversations is not None:
             return self._cached_conversations
 
         if not self.detect():
             return []
-
-        # 读取 app/sessions.json 元数据缓存（WorkBuddy 的 SessionMetaWriter 写入，
-        # 包含 DB 中可能缺失的会话，如 dd9b8415）
-        sessions_meta = self._load_sessions_json()
 
         conn = self._connect_db(self._db_path)
         cursor = conn.cursor()
@@ -100,12 +106,9 @@ class WorkBuddyAdapter(BaseAdapter):
             return []
 
         conversations = []
-        seen_ids = set()
         for row in cursor.fetchall():
-            seen_ids.add(row["id"])
             jsonl_path = self._find_jsonl_path(row["id"], row["cwd"])
             msg_count = self._count_jsonl_messages(jsonl_path)
-
             conv = Conversation(
                 id=row["id"],
                 title=self._clean_title(row["title"]),
@@ -124,110 +127,11 @@ class WorkBuddyAdapter(BaseAdapter):
 
         conn.close()
 
-        # 补充：app/sessions.json 中有但 DB 中缺失的会话
-        for sid, meta in sessions_meta.items():
-            if sid in seen_ids:
-                continue
-            seen_ids.add(sid)
-            cwd = meta.get("workDir", "")
-            jsonl_path = self._find_jsonl_path(sid, cwd)
-            if not jsonl_path:
-                continue
-            msg_count = self._count_jsonl_messages(jsonl_path)
-            title = self._extract_title_from_jsonl(jsonl_path)
-            conv = Conversation(
-                id=sid,
-                title=self._clean_title(title),
-                created_at=self._parse_iso_dt(meta.get("startedAt")),
-                updated_at=self._parse_iso_dt(meta.get("resumedAt")),
-                source_app=self.display_name,
-                metadata={
-                    "cwd": cwd,
-                    "model": "",
-                    "status": "unknown",
-                    "msg_count": msg_count,
-                    "jsonl_path": jsonl_path,
-                    "from_sessions_json": True,
-                }
-            )
-            conversations.append(conv)
-
-        # 最终补充：projects 目录中有 jsonl 但既不在 DB 也不在 sessions.json 的对话
-        if self._projects_dir and os.path.isdir(self._projects_dir):
-            self._scan_projects_dir(conversations, seen_ids)
-
         # 按更新时间降序排列
         conversations.sort(key=lambda c: c.updated_at or datetime.min, reverse=True)
 
         self._cached_conversations = conversations
         return conversations
-
-    def _load_sessions_json(self) -> dict:
-        """读取 app/sessions.json 元数据缓存。"""
-        if not self._sessions_json_path or not os.path.exists(self._sessions_json_path):
-            return {}
-        try:
-            with open(self._sessions_json_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            # sessions.json 可能是 list 或 dict
-            if isinstance(data, list):
-                return {item.get("conversationId", ""): item for item in data if isinstance(item, dict)}
-            if isinstance(data, dict):
-                # 可能是 {conversationId: meta} 或含 sessions key
-                if "sessions" in data and isinstance(data["sessions"], list):
-                    return {item.get("conversationId", ""): item for item in data["sessions"] if isinstance(item, dict)}
-                return data
-        except Exception:
-            pass
-        return {}
-
-    @staticmethod
-    def _parse_iso_dt(s: Optional[str]) -> Optional[datetime]:
-        """解析 ISO 8601 时间字符串（如 2026-06-20T12:10:51.000Z），返回 naive datetime。"""
-        if not s or not isinstance(s, str):
-            return None
-        try:
-            clean = s.replace("Z", "+00:00")
-            dt = datetime.fromisoformat(clean)
-            # 统一返回 naive datetime（去掉时区信息），与 DB 的 _ts_to_dt 保持一致
-            if dt.tzinfo is not None:
-                dt = dt.replace(tzinfo=None)
-            return dt
-        except (ValueError, TypeError):
-            return None
-
-    def _scan_projects_dir(self, conversations: List[Conversation], db_ids: set):
-        """扫描 projects 目录，补充 DB 中缺失的对话。"""
-        for dirname in os.listdir(self._projects_dir):
-            dirpath = os.path.join(self._projects_dir, dirname)
-            if not os.path.isdir(dirpath):
-                continue
-            for fname in os.listdir(dirpath):
-                if not fname.endswith(".jsonl"):
-                    continue
-                sid = fname[:-6]  # strip .jsonl
-                if sid in db_ids:
-                    continue
-                fpath = os.path.join(dirpath, fname)
-                title = self._extract_title_from_jsonl(fpath)
-                msg_count = self._count_jsonl_messages(fpath)
-                st = os.stat(fpath)
-                conv = Conversation(
-                    id=sid,
-                    title=self._clean_title(title),
-                    created_at=datetime.fromtimestamp(st.st_ctime),
-                    updated_at=datetime.fromtimestamp(st.st_mtime),
-                    source_app=self.display_name,
-                    metadata={
-                        "cwd": dirname,
-                        "model": "",
-                        "status": "unknown",
-                        "msg_count": msg_count,
-                        "jsonl_path": fpath,
-                        "from_scan": True,
-                    }
-                )
-                conversations.append(conv)
 
     @staticmethod
     def _extract_title_from_jsonl(path: str) -> str:
