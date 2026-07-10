@@ -1,233 +1,208 @@
-# ChatExporter - 多程序对话导出工具
+# ChatExporter · 本地对话归档工作台
 
-一个跨平台对话导出工具，支持从多个 AI 助手程序中提取和导出对话记录为 Markdown 格式。
+ChatExporter 是一款本地优先的多程序对话导出工具，可从多个 AI 助手客户端读取对话、预览内容，并完整导出为 Markdown。所有数据都在用户自己的电脑上处理，不上传到云端。
 
-## ✨ 特性
+## 核心能力
 
-- **多程序支持**: TRAE SOLO CN、QoderWork CN、WorkBuddy、QClaw、腾讯 Marvis
-- **TRAE 密钥助手**: 提供显式按钮，在用户确认后从本机 TRAE 进程中尝试提取 SQLCipher 密钥
-- **智能标题**: 自动清洗无效标题，过滤部分 QClaw 内部 memory/dream diary 噪声
-- **完整导出**: 默认包含文本、思考过程、工具调用、代码块等内容类型
-- **轻量界面**: 对话列表分批渲染；预览大对话时自动截断预览但不影响真实导出
-- **隐私保护**: 所有数据本地处理，不上传任何信息
+- **多程序支持**：TRAE SOLO CN、QoderWork CN、WorkBuddy、QClaw、腾讯 Marvis
+- **现代化桌面界面**：深色来源导航、卡片式对话库、沉浸式预览、清晰状态反馈
+- **完整导出**：默认包含正文、思考过程、工具调用、工具结果、代码块和附件信息
+- **高性能交互**：列表分批渲染、搜索防抖、后台线程读取、超大对话预览保护
+- **TRAE Key Assistant**：用户显式授权后，快速尝试从本机 TRAE 进程中提取 SQLCipher key
+- **本地隐私**：不上传对话、不上传 key、不依赖云端服务
+
+## 界面设计
+
+v1.1.0 采用新的 **Local Conversation Studio** 设计语言：
+
+- 左侧固定来源导航，使用应用缩写、状态点和来源色区分不同客户端
+- 顶部统一命令栏，集中放置刷新、TRAE Key Assistant、批量导出和单条导出
+- 中间对话库采用更高密度但更清晰的表格与搜索体验
+- 右侧预览区重新设计角色层级、代码样式、工具调用和空状态
+- 底部状态栏统一显示任务状态、进度和 Local / Private 标识
+- 使用纯 Tk/Ttk 实现，不增加额外 GUI 运行时依赖，仍可打包为单文件 EXE
 
 ## 安装
 
-### 方法一：下载预编译版本（推荐）
+### 下载预编译版本
 
-从 [Releases](https://github.com/fanchen621/ChatExporter/releases) 页面下载最新的 `ChatExporter.exe`，双击即可运行。
+从 Releases 页面下载最新的 `ChatExporter.exe`，双击运行。
 
-### 方法二：从源码运行
+### 从源码运行
 
 ```bash
-# 克隆仓库
 git clone https://github.com/fanchen621/ChatExporter.git
 cd ChatExporter
-
-# 安装依赖
 pip install -r requirements.txt
-
-# 运行程序
 python main.py
 ```
 
-### 方法三：自行打包
+### 自行打包
 
 ```bash
-# 安装 PyInstaller
 pip install pyinstaller
-
-# 打包为单个 EXE
 python build_exe.py
 ```
 
-打包完成后，EXE 文件位于 `dist/ChatExporter.exe`
+打包结果位于：
 
-## 🚀 使用方法
-
-### 基本使用
-
-1. **启动程序**: 双击 `ChatExporter.exe` 或运行 `python main.py`
-2. **自动检测**: 程序会自动检测已安装的 AI 助手程序
-3. **选择程序**: 点击左侧面板中的程序名称
-4. **浏览对话**: 在中间面板查看对话列表，支持搜索过滤
-5. **预览内容**: 点击对话后在右侧查看预览内容
-6. **导出对话**:
-   - 单个导出：选中对话后点击「导出选中」
-   - 批量导出：点击「批量导出」
-
-> 说明：为了避免超大对话卡住界面，右侧预览会做长度保护；导出的 Markdown 文件仍会保留完整内容。
-
-### TRAE SOLO CN 特殊配置
-
-TRAE SOLO CN 使用 SQLCipher 加密数据库。完整导出需要 SQLCipher 密钥。本工具支持三种方式：
-
-#### 方式一：点击「提取 TRAE 密钥」（推荐给普通用户）
-
-1. 启动 TRAE SOLO CN，并打开任意一个对话窗口
-2. 启动 ChatExporter，左侧选择「TRAE SOLO CN」
-3. 点击中间底部的「提取 TRAE 密钥」
-4. 确认授权后，程序会在本机有界扫描 TRAE 进程内存
-5. 成功后会自动写入本地缓存，并重新加载 TRAE 数据库
-6. 弹窗中可以选择「复制密钥」或「写入环境变量」
-
-这个流程是显式触发的：程序不会在你没有点击按钮时自动读取进程内存。
-
-#### 方式二：手动配置环境变量
-
-如果你知道密钥，可以设置为环境变量：
-
-```bash
-# Windows PowerShell，仅当前窗口有效
-$env:TRAE_SQLCIPHER_KEY="<你的SQLCipher密钥>"
-python main.py
-
-# Windows CMD，仅当前窗口有效
-set TRAE_SQLCIPHER_KEY=<你的SQLCipher密钥>
-python main.py
-
-# Windows 持久写入用户环境变量
-setx TRAE_SQLCIPHER_KEY <你的SQLCipher密钥>
+```text
+dist/ChatExporter.exe
 ```
 
-#### 方式三：日志回退模式
+## 使用方法
 
-如果没有密钥，程序会快速回退到日志解析模式。日志模式不会卡顿，但内容可能不如数据库模式完整。
+1. 启动 ChatExporter
+2. 从左侧选择一个已检测到的来源
+3. 在对话库中搜索或选择对话
+4. 在右侧预览完整内容
+5. 点击 `Export selected` 导出当前对话，或点击 `Export all` 批量导出
 
-> ⚠️ **安全提示**: 密钥属于敏感信息。请不要上传到公开仓库、Issue、截图或聊天记录中。
+快捷键：
 
-### 导出选项
+| 快捷键 | 功能 |
+|---|---|
+| `Ctrl + F` / `Ctrl + K` | 聚焦搜索框 |
+| `Ctrl + E` | 导出当前对话 |
+| `Ctrl + Shift + E` | 批量导出 |
+| `F5` | 刷新当前来源 |
 
-- **思考过程**: 默认包含，不再提供关闭开关
-- **时间戳**: 默认包含每条消息的时间戳
-- **元数据**: 包含对话的基本信息（来源程序、创建时间、消息数量等）
+> 超大对话会在界面预览中做长度保护，但导出的 Markdown 文件仍保留完整内容。
 
-## 📁 支持的数据格式
+## TRAE Key Assistant
 
-### 消息类型
+TRAE SOLO CN 的完整对话数据库使用 SQLCipher 加密。普通用户不知道 key 时，可以使用内置助手：
 
-- ✅ 文本消息
-- ✅ 思考过程（Thinking/Reasoning）
-- ✅ 工具调用（Tool Calls）
-- ✅ 工具返回结果
-- ✅ 代码块（带语法高亮）
-- ✅ 文件附件
-- ✅ 图片引用
+1. 启动 TRAE SOLO CN
+2. 打开任意一个对话窗口
+3. 在 ChatExporter 左侧选择 TRAE
+4. 点击顶部 `TRAE Key Assistant`
+5. 阅读说明后点击 `Start secure scan`
+6. 成功后程序会自动缓存 key，并重新加载完整 TRAE 数据库
 
-### 导出格式
+### 扫描与安全策略
 
-- Markdown (.md) - 支持所有主流 Markdown 阅读器
-- 文件名格式：`{对话标题}_{时间戳}.md`
+- 默认不会自动读取进程内存
+- 只有用户显式点击按钮后才执行扫描
+- 扫描范围仅限 TRAE 相关进程的可写私有内存
+- 扫描有 8 秒和 300MB 上限，并支持取消
+- 先扫描 ASCII / UTF-16 hex 字符串，再做有限原始缓冲区扫描
+- key 使用数据库第一页快速校验，不会把未验证候选写入缓存
+- Windows 下本地缓存使用 DPAPI 加密，与当前 Windows 用户绑定
+- 写入环境变量使用用户注册表，不再通过带明文参数的 `setx` 子进程
 
-## 技术细节
+### 手动设置 key
 
-### 架构设计
+```powershell
+# 当前 PowerShell 窗口
+$env:TRAE_SQLCIPHER_KEY="<你的SQLCipher密钥>"
+python main.py
+```
+
+```bat
+:: 当前 CMD 窗口
+set TRAE_SQLCIPHER_KEY=<你的SQLCipher密钥>
+python main.py
+```
+
+也可以在 Key Assistant 成功页面点击 `Save to Windows`，安全写入当前用户环境变量。
+
+如果没有 key，程序会快速回退到日志解析模式，避免卡死；日志模式的内容可能不如数据库模式完整。
+
+> SQLCipher key 属于敏感信息，请勿上传到公开仓库、Issue、截图或聊天记录。
+
+## 支持的内容类型
+
+- 文本消息
+- Thinking / Reasoning
+- Tool Calls
+- Tool Results
+- 代码块
+- 文件附件
+- 图片引用
+- 时间戳与模型信息
+
+## 项目结构
 
 ```text
 ChatExporter/
-├── main.py                 # 程序入口
-├── build_exe.py            # PyInstaller 打包脚本
-├── requirements.txt        # Python 依赖
+├── main.py
+├── build_exe.py
+├── requirements.txt
+├── tests/
+│   └── test_trae_optimized.py
 └── chat_exporter/
-    ├── gui.py              # Tkinter GUI 界面
-    ├── models.py           # 数据模型定义
-    ├── markdown_exporter.py# Markdown 导出器
-    └── adapters/           # 各程序适配器
-        ├── base.py         # 基础适配器类
-        ├── trae.py         # TRAE SOLO CN
-        ├── qoderwork.py    # QoderWork CN
-        ├── workbuddy.py    # WorkBuddy
-        ├── qclaw.py        # QClaw
-        └── marvis.py       # 腾讯 Marvis
+    ├── gui_modern.py          # 当前现代化 UI
+    ├── gui.py                 # 旧版 UI，保留作为回滚路径
+    ├── ui_theme.py            # 设计令牌与 Ttk 样式系统
+    ├── models.py
+    ├── markdown_exporter.py
+    └── adapters/
+        ├── base.py
+        ├── trae.py            # 已验证的 TRAE 数据解析逻辑
+        ├── trae_optimized.py  # 显式扫描、DPAPI 缓存和快速 key 验证
+        ├── qoderwork.py
+        ├── workbuddy.py
+        ├── qclaw.py
+        └── marvis.py
 ```
 
-### TRAE 数据库解密原理
+`main.py` 默认启动 `gui_modern.py`。旧版 `gui.py` 暂时保留，便于快速回滚和差异核验。
 
-TRAE SOLO CN 使用 SQLCipher 4 加密：
+## 性能与可靠性
 
-- 加密算法：AES-256-CBC
-- KDF 迭代：256,000 次
-- 验证方式：HMAC-SHA512
+- GUI 工作线程通过线程安全队列回到 Tk 主线程，不再从后台线程直接操作 Tk
+- 对话列表按批次写入 Treeview，减少大量记录下的假死
+- 搜索输入使用防抖
+- 预览有总长度和单段长度保护
+- TRAE key 扫描使用两阶段策略，并优先扫描主进程
+- key 候选仅解密第一页首块完成快速验证
+- QClaw message parts 使用批量读取，减少 N+1 查询
+- Windows GitHub Actions 对 Python 3.10 / 3.12 执行编译和单元测试
 
-本工具通过以下方式获取解密密钥：
+## 开发与验证
 
-1. **环境变量**: 从 `TRAE_SQLCIPHER_KEY` 读取
-2. **本地缓存**: 成功提取后保存到用户本地缓存，并用数据库指纹校验
-3. **显式内存提取**: 仅当用户点击「提取 TRAE 密钥」并确认后，扫描 TRAE 进程内存
-4. **日志回退**: 无密钥时快速读取最近日志尾部，避免卡顿
+```bash
+python -m compileall -q main.py build_exe.py chat_exporter
+python -m unittest discover -s tests -v
+```
 
-解密后的数据库会保存到临时文件，程序退出后自动清理。
+本项目的 CI 在 Windows 环境运行，以覆盖 Tkinter、Windows 路径和 TRAE 相关平台代码的基础回归。
 
-## 开发指南
+## 更新日志
 
-### 添加新程序支持
+### v1.1.0
 
-1. 在 `chat_exporter/adapters/` 创建新的适配器文件
-2. 继承 `BaseAdapter` 类
-3. 实现以下方法：
-   - `detect()`: 检测程序是否安装
-   - `get_app_info()`: 获取程序信息
-   - `list_conversations()`: 列出所有对话
-   - `get_conversation()`: 获取单个对话详情
-4. 在 `gui.py` 中注册新适配器
+- 全面重做前端 UI，升级为 Local Conversation Studio
+- 新增统一设计系统、现代导航、命令栏、卡片式列表与预览
+- 改为线程安全 UI 队列，减少 Tk 跨线程不稳定问题
+- TRAE 默认改为显式扫描，不再无提示自动读取进程内存
+- TRAE key 扫描升级为 ASCII / UTF-16 / raw 两阶段策略
+- key 缓存升级为 v2；Windows 使用 DPAPI 加密
+- key 缓存不再绑定数据库 mtime，数据库更新后仍可复用并重新校验
+- 新增扫描取消、主进程优先级和安全环境变量写入
+- 新增 Windows CI 和 key/cache 回归测试
 
-### 代码规范
+### v1.0.2
 
-- 使用 Python 3.8+
-- 遵循 PEP 8 编码规范
-- 类型注解：使用 `typing` 模块
-- 文档字符串：所有公共方法都需要 docstring
+- 新增显式 TRAE 密钥助手
+- 成功提取后自动本地缓存并重新加载数据库
+- 增加扫描状态、时间和内存上限
 
-## 贡献
+### v1.0.1
 
-欢迎提交 Issue 和 Pull Request！
+- 修复 GUI 卡顿和 Windows/Tk 黑块显示
+- 取消“包含思考过程”开关，默认完整导出
+- 优化 QClaw 列表和 message parts 读取
 
-### 贡献流程
+### v1.0.0
 
-1. Fork 本仓库
-2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支
-5. 开启 Pull Request
+- 初始版本
 
-## 📝 更新日志
+## 免责声明
 
-### v1.0.2 (2026-07-09)
-- 新增 TRAE 密钥助手按钮：用户显式确认后扫描本机 TRAE 进程内存
-- 成功提取后自动本地缓存，并可复制密钥或写入用户环境变量
-- 无 key 时默认不扫内存，继续保持快速日志回退
-- 密钥获取前只做第一页快速校验，不为“获取 key”提前全库解密
-- 扫描过程增加状态提示、8 秒上限、300MB 上限和结果弹窗
+本工具仅用于读取和导出用户自己设备上的本地数据。使用时请遵守相关软件的使用条款和当地法律。作者不对因错误使用造成的损失承担责任。
 
-### v1.0.1 (2026-07-09)
-- 修复 GUI 卡顿：对话列表分批渲染、搜索防抖、超大预览截断
-- 修复 Windows/Tk 黑块显示：移除界面 emoji，Canvas 指示条改为 Frame
-- 取消“包含思考过程”开关，导出默认包含思考过程
-- 修复批量导出可能只导出列表元数据的问题：导出前按需加载完整对话
-- 优化 QClaw：列表阶段不读取大文本、批量读取 message_parts、清理内部 memory 噪声标题
+## License
 
-### v1.0.0 (2026-07-09)
-- 初始版本发布
-- ✅ 支持 5 个 AI 助手程序
-- ✅ TRAE SOLO CN 数据库解密
-- ✅ 智能标题清洗
-- ✅ 现代 GUI 界面
-- ✅ 批量导出功能
-
-## ⚠️ 免责声明
-
-本工具仅供学习和研究使用。使用本工具导出对话记录时，请遵守相关程序的使用条款和隐私政策。作者不对因使用本工具造成的任何损失承担责任。
-
-## 📄 许可证
-
-本项目采用 MIT 许可证 - 详见 [LICENSE](LICENSE) 文件
-
-## 🙏 致谢
-
-- [PyInstaller](https://www.pyinstaller.org/) - Python 打包工具
-- [cryptography](https://cryptography.io/) - 加密库
-- [Tkinter](https://docs.python.org/3/library/tkinter.html) - GUI 框架
-
----
-
-**Made with ❤️ by fanchen621**
+MIT
