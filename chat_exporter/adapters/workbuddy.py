@@ -41,6 +41,20 @@ class WorkBuddyAdapter(BaseAdapter):
         slug = re.sub(r'-+', '-', slug)
         return slug.strip('-')
 
+    @staticmethod
+    def _clean_title(title: str) -> str:
+        """清洗对话标题：去除控制字符、折叠空白、截断过长标题。"""
+        if not title:
+            return "(无标题对话)"
+        # 去除 \r \n \t 等控制字符
+        title = re.sub(r'[\r\n\t]+', ' ', title)
+        # 折叠连续空白
+        title = re.sub(r'\s+', ' ', title).strip()
+        # 截断过长标题（保留前 80 字符）
+        if len(title) > 80:
+            title = title[:80] + "..."
+        return title or "(无标题对话)"
+
     def detect(self) -> bool:
         if not self._db_path:
             self._find_paths()
@@ -78,13 +92,13 @@ class WorkBuddyAdapter(BaseAdapter):
 
         conversations = []
         for row in cursor.fetchall():
-            # 估算消息数：jsonl 文件中的非空行数
+            # 统计消息数：只计数可解析的消息记录行
             jsonl_path = self._find_jsonl_path(row["id"], row["cwd"])
             msg_count = self._count_jsonl_messages(jsonl_path)
 
             conv = Conversation(
                 id=row["id"],
-                title=row["title"] or "(无标题对话)",
+                title=self._clean_title(row["title"]),
                 created_at=self._ts_to_dt(row["created_at"], ms=True),
                 updated_at=self._ts_to_dt(row["updated_at"], ms=True),
                 source_app=self.display_name,
@@ -102,12 +116,29 @@ class WorkBuddyAdapter(BaseAdapter):
         return conversations
 
     def _count_jsonl_messages(self, jsonl_path: Optional[str]) -> int:
-        """快速统计 jsonl 文件中的消息行数（只数非空行，不解析 JSON）"""
+        """统计 jsonl 文件中的有效消息记录数。
+
+        使用快速字符串匹配，只计数 type 为 message/reasoning/function_call/
+        function_call_result 的行，与 _parse_jsonl 的实际输出保持一致。
+        """
         if not jsonl_path or not os.path.exists(jsonl_path):
             return 0
+        # 已知的记录类型（与 _parse_record 中处理的类型一致）
+        known_types = ('"type":"message"', '"type": "message"',
+                       '"type":"reasoning"', '"type": "reasoning"',
+                       '"type":"function_call"', '"type": "function_call"',
+                       '"type":"function_call_result"', '"type": "function_call_result"')
         try:
+            count = 0
             with open(jsonl_path, "r", encoding="utf-8", errors="replace") as f:
-                return sum(1 for line in f if line.strip())
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    # 快速匹配已知类型，避免完整 JSON 解析
+                    if any(t in line for t in known_types):
+                        count += 1
+            return count
         except Exception:
             return 0
 
@@ -155,7 +186,7 @@ class WorkBuddyAdapter(BaseAdapter):
 
         conv = Conversation(
             id=sess_row["id"],
-            title=sess_row["title"] or "(无标题对话)",
+            title=self._clean_title(sess_row["title"]),
             created_at=self._ts_to_dt(sess_row["created_at"], ms=True),
             updated_at=self._ts_to_dt(sess_row["updated_at"], ms=True),
             messages=messages,
@@ -167,7 +198,6 @@ class WorkBuddyAdapter(BaseAdapter):
 
     def _parse_jsonl(self, path: str) -> List[Message]:
         messages = []
-        current_msg = None
 
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -181,6 +211,9 @@ class WorkBuddyAdapter(BaseAdapter):
 
                 msg = self._parse_record(record)
                 if msg:
+                    # 跳过完全空的消息（content 和 parts 都为空）
+                    if not msg.content and not msg.parts:
+                        continue
                     messages.append(msg)
 
         return messages
