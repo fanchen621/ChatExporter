@@ -320,7 +320,6 @@ class ChatExporterGUI(BaseChineseGUI):
 
     def _build_preview_card(self, parent):
         super()._build_preview_card(parent)
-        self.preview_text.configure(yscrollincrement=28)
 
         # v1.1.2 的预览使用 classic Tk scrollbar；显式设置为不透明、易拖动。
         for widget in self._walk_widgets(parent):
