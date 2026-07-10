@@ -18,6 +18,7 @@ class WorkBuddyAdapter(BaseAdapter):
         self._user_id = None
         self._projects_dir = None
         self._db_path = None
+        self._sessions_json_path = None
         self._cached_conversations = None
         self._find_paths()
 
@@ -30,10 +31,12 @@ class WorkBuddyAdapter(BaseAdapter):
             wb_dir = os.path.join(users_dir, uid, ".workbuddy")
             db_path = os.path.join(wb_dir, "workbuddy.db")
             projects_dir = os.path.join(wb_dir, "projects")
+            sessions_json = os.path.join(wb_dir, "app", "sessions.json")
             if os.path.exists(db_path):
                 self._user_id = uid
                 self._db_path = db_path
                 self._projects_dir = projects_dir
+                self._sessions_json_path = sessions_json
                 return
 
     def _cwd_to_slug(self, cwd: str) -> str:
@@ -78,6 +81,10 @@ class WorkBuddyAdapter(BaseAdapter):
         if not self.detect():
             return []
 
+        # 读取 app/sessions.json 元数据缓存（WorkBuddy 的 SessionMetaWriter 写入，
+        # 包含 DB 中可能缺失的会话，如 dd9b8415）
+        sessions_meta = self._load_sessions_json()
+
         conn = self._connect_db(self._db_path)
         cursor = conn.cursor()
 
@@ -85,6 +92,7 @@ class WorkBuddyAdapter(BaseAdapter):
             cursor.execute("""
             SELECT id, title, cwd, model, status, created_at, updated_at
             FROM sessions
+            WHERE deleted_at IS NULL
             ORDER BY updated_at DESC
         """)
         except Exception:
@@ -92,9 +100,9 @@ class WorkBuddyAdapter(BaseAdapter):
             return []
 
         conversations = []
-        db_ids = set()
+        seen_ids = set()
         for row in cursor.fetchall():
-            db_ids.add(row["id"])
+            seen_ids.add(row["id"])
             jsonl_path = self._find_jsonl_path(row["id"], row["cwd"])
             msg_count = self._count_jsonl_messages(jsonl_path)
 
@@ -109,22 +117,84 @@ class WorkBuddyAdapter(BaseAdapter):
                     "model": row["model"],
                     "status": row["status"],
                     "msg_count": msg_count,
+                    "jsonl_path": jsonl_path,
                 }
             )
             conversations.append(conv)
 
         conn.close()
 
-        # 补充扫描：projects 目录中有 jsonl 但不在 sessions 表中的对话
-        # （WorkBuddy 有时会写入 jsonl 但未同步到 DB，UI 仍会显示）
+        # 补充：app/sessions.json 中有但 DB 中缺失的会话
+        for sid, meta in sessions_meta.items():
+            if sid in seen_ids:
+                continue
+            seen_ids.add(sid)
+            cwd = meta.get("workDir", "")
+            jsonl_path = self._find_jsonl_path(sid, cwd)
+            if not jsonl_path:
+                continue
+            msg_count = self._count_jsonl_messages(jsonl_path)
+            title = self._extract_title_from_jsonl(jsonl_path)
+            conv = Conversation(
+                id=sid,
+                title=self._clean_title(title),
+                created_at=self._parse_iso_dt(meta.get("startedAt")),
+                updated_at=self._parse_iso_dt(meta.get("resumedAt")),
+                source_app=self.display_name,
+                metadata={
+                    "cwd": cwd,
+                    "model": "",
+                    "status": "unknown",
+                    "msg_count": msg_count,
+                    "jsonl_path": jsonl_path,
+                    "from_sessions_json": True,
+                }
+            )
+            conversations.append(conv)
+
+        # 最终补充：projects 目录中有 jsonl 但既不在 DB 也不在 sessions.json 的对话
         if self._projects_dir and os.path.isdir(self._projects_dir):
-            self._scan_projects_dir(conversations, db_ids)
+            self._scan_projects_dir(conversations, seen_ids)
 
         # 按更新时间降序排列
         conversations.sort(key=lambda c: c.updated_at or datetime.min, reverse=True)
 
         self._cached_conversations = conversations
         return conversations
+
+    def _load_sessions_json(self) -> dict:
+        """读取 app/sessions.json 元数据缓存。"""
+        if not self._sessions_json_path or not os.path.exists(self._sessions_json_path):
+            return {}
+        try:
+            with open(self._sessions_json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            # sessions.json 可能是 list 或 dict
+            if isinstance(data, list):
+                return {item.get("conversationId", ""): item for item in data if isinstance(item, dict)}
+            if isinstance(data, dict):
+                # 可能是 {conversationId: meta} 或含 sessions key
+                if "sessions" in data and isinstance(data["sessions"], list):
+                    return {item.get("conversationId", ""): item for item in data["sessions"] if isinstance(item, dict)}
+                return data
+        except Exception:
+            pass
+        return {}
+
+    @staticmethod
+    def _parse_iso_dt(s: Optional[str]) -> Optional[datetime]:
+        """解析 ISO 8601 时间字符串（如 2026-06-20T12:10:51.000Z），返回 naive datetime。"""
+        if not s or not isinstance(s, str):
+            return None
+        try:
+            clean = s.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(clean)
+            # 统一返回 naive datetime（去掉时区信息），与 DB 的 _ts_to_dt 保持一致
+            if dt.tzinfo is not None:
+                dt = dt.replace(tzinfo=None)
+            return dt
+        except (ValueError, TypeError):
+            return None
 
     def _scan_projects_dir(self, conversations: List[Conversation], db_ids: set):
         """扫描 projects 目录，补充 DB 中缺失的对话。"""
@@ -270,36 +340,56 @@ class WorkBuddyAdapter(BaseAdapter):
         if not self.detect():
             return None
 
+        # 优先从 DB 获取元数据
         conn = self._connect_db(self._db_path)
         cursor = conn.cursor()
-
         cursor.execute("""
             SELECT id, title, cwd, model, created_at, updated_at
             FROM sessions
-            WHERE id = ?
+            WHERE id = ? AND deleted_at IS NULL
         """, (conv_id,))
         sess_row = cursor.fetchone()
         conn.close()
 
-        if not sess_row:
+        if sess_row:
+            # DB 中有记录 → 用 DB 元数据 + jsonl 内容
+            jsonl_path = self._find_jsonl_path(conv_id, sess_row["cwd"])
+            messages = self._parse_jsonl(jsonl_path) if jsonl_path and os.path.exists(jsonl_path) else []
+            return Conversation(
+                id=sess_row["id"],
+                title=self._clean_title(sess_row["title"]),
+                created_at=self._ts_to_dt(sess_row["created_at"], ms=True),
+                updated_at=self._ts_to_dt(sess_row["updated_at"], ms=True),
+                messages=messages,
+                model=sess_row["model"],
+                source_app=self.display_name,
+                metadata={"cwd": sess_row["cwd"], "jsonl_path": jsonl_path}
+            )
+
+        # DB 中没有 → 从 sessions.json + projects 目录加载
+        sessions_meta = self._load_sessions_json()
+        meta = sessions_meta.get(conv_id, {})
+        cwd = meta.get("workDir", "")
+
+        # 搜索 jsonl 文件
+        jsonl_path = self._find_jsonl_path(conv_id, cwd)
+        if not jsonl_path or not os.path.exists(jsonl_path):
             return None
 
-        jsonl_path = self._find_jsonl_path(conv_id, sess_row["cwd"])
-        messages = []
-        if jsonl_path and os.path.exists(jsonl_path):
-            messages = self._parse_jsonl(jsonl_path)
+        messages = self._parse_jsonl(jsonl_path)
+        title = self._extract_title_from_jsonl(jsonl_path)
+        st = os.stat(jsonl_path)
 
-        conv = Conversation(
-            id=sess_row["id"],
-            title=self._clean_title(sess_row["title"]),
-            created_at=self._ts_to_dt(sess_row["created_at"], ms=True),
-            updated_at=self._ts_to_dt(sess_row["updated_at"], ms=True),
+        return Conversation(
+            id=conv_id,
+            title=self._clean_title(title),
+            created_at=self._parse_iso_dt(meta.get("startedAt")) or datetime.fromtimestamp(st.st_ctime),
+            updated_at=self._parse_iso_dt(meta.get("resumedAt")) or datetime.fromtimestamp(st.st_mtime),
             messages=messages,
-            model=sess_row["model"],
+            model="",
             source_app=self.display_name,
-            metadata={"cwd": sess_row["cwd"], "jsonl_path": jsonl_path}
+            metadata={"cwd": cwd, "jsonl_path": jsonl_path, "from_sessions_json": True}
         )
-        return conv
 
     def _parse_jsonl(self, path: str) -> List[Message]:
         messages = []
