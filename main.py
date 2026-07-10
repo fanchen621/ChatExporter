@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-from chat_exporter.gui import run
+"""ChatExporter application entry point."""
+
+from chat_exporter.gui_modern import run
+
 
 if __name__ == "__main__":
     run()
