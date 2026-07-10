@@ -124,8 +124,23 @@ class WorkBuddyAdapter(BaseAdapter):
                 return
 
     def _cwd_to_slug(self, cwd: str) -> str:
-        slug = cwd.replace("\\", "-").replace(":", "").replace("/", "-")
-        slug = re.sub(r'[^a-zA-Z0-9_-]', '-', slug)
+        """Convert a WorkBuddy session cwd into the projects/<slug> dir name.
+
+        Must match WorkBuddy's OWN slug rule (reverse-engineered from
+        the on-disk `projects/` directory names). WorkBuddy keeps the
+        drive letter, lowercases it, drops the colon, and replaces
+        path separators with '-':
+            C:\\Users\\黄振飞\\WorkBuddy\\2026-07-10  ->  c-Users-黄振飞-WorkBuddy-2026-07-10
+            C:\\ProgramData\\...                          ->  c-ProgramData-...
+        A wrong slug makes the primary jsonl lookup miss (the file is only
+        ever found via the slow full-scan fallback), so getting this right
+        is what keeps ChatExporter's exports in lock-step with the UI.
+        """
+        if not cwd:
+            return ""
+        cwd = cwd.replace("/", "\\")
+        # cwd[0] = drive letter, cwd[1] = ':', cwd[2] = '\\'
+        slug = cwd[0].lower() + "-" + cwd[3:].replace("\\", "-")
         slug = re.sub(r'-+', '-', slug)
         return slug.strip('-')
 
