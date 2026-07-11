@@ -40,7 +40,6 @@ _USER_QUERY_PATTERN = re.compile(
     r"<user_query(?:\s[^>]*)?>(.*?)</user_query\s*>",
     re.IGNORECASE | re.DOTALL,
 )
-# 只移除已知的内部上下文标签行，不误杀用户消息中的 XML/HTML 内容
 _INTERNAL_TAG_LINE = re.compile(
     rf"^\s*</?(?:{'|'.join(re.escape(t) for t in _INTERNAL_BLOCK_TAGS)})(?:\s[^>]*)?>\s*$",
     re.IGNORECASE,
@@ -57,10 +56,6 @@ _INTERNAL_LINE_PATTERNS = (
     re.compile(r"^\s*Path:\s*[A-Za-z]:\\", re.I),
 )
 
-# TRAE SOLO CN 任务消息会把 UI 状态标签混入正文文本：
-# "查看 N 个步骤"（可折叠工具调用区标题）、"处理中..."（状态指示）、
-# "创建"/"已执行命令"/"正在执行命令"/"深度思考"/"已读取"（操作标签）、
-# "已允许高危操作"（权限提示）。这些不是真实对话内容，应过滤。
 _TRAE_UI_LINE_PATTERNS = (
     re.compile(r"^查看\s*\d+\s*个步骤$"),
     re.compile(r"^已允许高危操作$"),
@@ -95,13 +90,11 @@ def strip_internal_context(text: str, source_app: str = "") -> str:
     if not value:
         return ""
 
-    # 在移除外层 system-reminder 前先保留显式 user_query。
     queries = [_clean(match) for match in _USER_QUERY_PATTERN.findall(value)]
     queries = [item for item in queries if item]
 
     for pattern in _INTERNAL_BLOCK_PATTERNS:
         value = pattern.sub("\n", value)
-
     value = re.sub(r"</?user_query(?:\s[^>]*)?>", "\n", value, flags=re.I)
 
     kept: List[str] = []
@@ -110,7 +103,6 @@ def strip_internal_context(text: str, source_app: str = "") -> str:
         stripped = line.strip()
         lower = stripped.casefold()
 
-        # 兼容被截断、没有完整闭合标签的内部上下文块。
         if skip_until:
             if lower.startswith(f"</{skip_until}"):
                 skip_until = None
@@ -131,8 +123,9 @@ def strip_internal_context(text: str, source_app: str = "") -> str:
             continue
         if any(pattern.search(stripped) for pattern in _INTERNAL_LINE_PATTERNS):
             continue
-        # TRAE UI 行标签仅对 TRAE 源应用生效，避免误删其他应用中同名的正常文本行。
-        if source_app.casefold().startswith("trae") and any(pattern.match(stripped) for pattern in _TRAE_UI_LINE_PATTERNS):
+        if source_app.casefold().startswith("trae") and any(
+            pattern.match(stripped) for pattern in _TRAE_UI_LINE_PATTERNS
+        ):
             continue
         kept.append(line)
 
@@ -169,28 +162,23 @@ def role_from_hint(raw_role: str) -> Optional[Role]:
     return None
 
 
+def _part_type(part) -> str:
+    return part.type.value if hasattr(part.type, "value") else str(part.type)
+
+
 def effective_role(message: Message) -> Optional[Role]:
     if message.role in VISIBLE_ROLES:
         return message.role
 
-    # SYSTEM 消息如果只有 thinking parts，实际上是 AI 的思考过程
-    if message.role == Role.SYSTEM:
-        has_thinking = any(
-            (p.type.value if hasattr(p.type, "value") else str(p.type)) == MessagePartType.THINKING.value
-            for p in message.parts
-        )
-        if has_thinking:
-            return Role.ASSISTANT
+    if message.role == Role.SYSTEM and any(
+        _part_type(part) == MessagePartType.THINKING.value for part in message.parts
+    ):
+        return Role.ASSISTANT
 
-    # TOOL 消息如果包含 TOOL_RESULT parts，是 AI 调用工具后的返回结果，
-    # 应作为 AI 回复的一部分展示（WorkBuddy function_call_result 等）。
-    if message.role == Role.TOOL:
-        has_tool_result = any(
-            (p.type.value if hasattr(p.type, "value") else str(p.type)) == MessagePartType.TOOL_RESULT.value
-            for p in message.parts
-        )
-        if has_tool_result:
-            return Role.ASSISTANT
+    if message.role == Role.TOOL and any(
+        _part_type(part) == MessagePartType.TOOL_RESULT.value for part in message.parts
+    ):
+        return Role.ASSISTANT
 
     metadata = message.metadata or {}
     for key in ("raw_role", "role", "sender_role", "author_role", "speaker", "sender"):
@@ -202,8 +190,7 @@ def effective_role(message: Message) -> Optional[Role]:
 
 def _looks_like_tool_placeholder(text: str, message: Message) -> bool:
     has_tool_part = any(
-        (part.type.value if hasattr(part.type, "value") else str(part.type))
-        in (MessagePartType.TOOL_CALL.value, MessagePartType.TOOL_RESULT.value)
+        _part_type(part) in (MessagePartType.TOOL_CALL.value, MessagePartType.TOOL_RESULT.value)
         for part in message.parts
     )
     return has_tool_part and any(pattern.search(text or "") for pattern in _TOOL_PLACEHOLDER_PATTERNS)
@@ -211,18 +198,48 @@ def _looks_like_tool_placeholder(text: str, message: Message) -> bool:
 
 def _looks_like_thinking_placeholder(text: str, message: Message) -> bool:
     has_thinking = any(
-        (part.type.value if hasattr(part.type, "value") else str(part.type))
-        == MessagePartType.THINKING.value
-        for part in message.parts
+        _part_type(part) == MessagePartType.THINKING.value for part in message.parts
     )
     return has_thinking and any(pattern.search(text or "") for pattern in _THINKING_PLACEHOLDER_PATTERNS)
+
+
+def _fallback_visible_text(message: Message, source_app: str, role: Role) -> str:
+    """Readable fallback for messages whose final body is not a TEXT part."""
+    if role != Role.ASSISTANT:
+        return ""
+
+    thinking = [
+        _clean(part.content)
+        for part in message.parts
+        if _part_type(part) == MessagePartType.THINKING.value and _clean(part.content)
+    ]
+    if thinking:
+        if (source_app or "").casefold().startswith("trae"):
+            # A TRAE task can split the final delivery across several plan_item
+            # rows. Keep every block instead of stopping after the first one.
+            return "\n\n---\n\n".join(thinking)
+
+        lines = [line for line in thinking[0].splitlines() if line.strip()]
+        if lines:
+            summary = "\n".join(lines[:8])
+            if len(summary) > 600:
+                summary = summary[:600] + "…"
+            return f"[AI 思考摘要]\n{summary}"
+
+    for part in reversed(message.parts):
+        if _part_type(part) != MessagePartType.TOOL_RESULT.value:
+            continue
+        output = _clean(part.tool_output or part.content or "")
+        if output:
+            return f"[工具结果]\n{output}"
+    return ""
 
 
 def message_preview_text(message: Message, source_app: str = "") -> str:
     """提取适合阅读和全文检索的用户/AI正文。
 
-    思考过程、工具调用、工具结果和系统上下文仍保留给 Markdown 完整导出，
-    但不会污染预览界面。
+    正常回复只展示用户/AI正文、代码和附件。若客户端把最终交付仅存入
+    thinking 或 tool_result，则使用完整性回退，避免整条消息在预览中消失。
     """
 
     role = effective_role(message)
@@ -232,85 +249,54 @@ def message_preview_text(message: Message, source_app: str = "") -> str:
     chunks: List[str] = []
     seen = set()
 
-    def append(text: str) -> None:
+    def append(text: str) -> bool:
         value = strip_internal_context(text, source_app=source_app)
         if not value:
-            # 与导出器一致：strip_internal_context 清空时用原始文本兜底，
-            # 避免预览丢失消息（导出有 _clean_content 兜底，预览也应有）。
             value = _clean(text)
             if not value:
-                return
+                return False
         if _looks_like_tool_placeholder(value, message):
-            return
+            return False
         if _looks_like_thinking_placeholder(value, message):
-            return
+            return False
         key = value.casefold()
         if key in seen:
-            return
+            return False
         seen.add(key)
         chunks.append(value)
+        return True
 
-    # 与导出器一致：优先从 parts 的 TEXT parts 提取正文。
     has_text_part = False
+    has_primary_body = False
     for part in message.parts:
-        part_type = part.type.value if hasattr(part.type, "value") else str(part.type)
+        part_type = _part_type(part)
         if part_type == MessagePartType.TEXT.value:
             has_text_part = True
-            append(part.content)
+            has_primary_body = append(part.content) or has_primary_body
         elif part_type == MessagePartType.CODE.value:
             language = _clean(part.language or "")
             code = _clean(part.content)
             if code:
-                append(f"```{language}\n{code}\n```")
+                has_primary_body = append(f"```{language}\n{code}\n```") or has_primary_body
         elif part_type in (MessagePartType.FILE.value, MessagePartType.IMAGE.value):
             name = _clean(part.file_name or part.content or "附件")
             append(f"[附件] {name}")
 
-    # 回退：parts 中没有 TEXT parts 时，用 content 作为正文来源。
     if not has_text_part and message.content and message.content.strip():
-        append(message.content)
+        has_primary_body = append(message.content) or has_primary_body
 
-    # 回退：如果 ASSISTANT 消息没有任何可见文本，但有 thinking parts，
-    # TRAE 的 task 消息中 reasoning_content 就是 AI 的实际回复，展示完整内容；
-    # 其他应用（如 WorkBuddy）reasoning 是内部思考，有独立文本回复，
-    # 仅展示截断摘要，不当作完整回答。
-    if not chunks and role == Role.ASSISTANT:
-        is_trae = (source_app or "").casefold().startswith("trae")
-        for part in message.parts:
-            part_type = part.type.value if hasattr(part.type, "value") else str(part.type)
-            if part_type == MessagePartType.THINKING.value:
-                thinking_text = _clean(part.content)
-                if thinking_text:
-                    if is_trae:
-                        chunks.append(thinking_text)
-                    else:
-                        lines = [l for l in thinking_text.splitlines() if l.strip()]
-                        if lines:
-                            summary = "\n".join(lines[:8])
-                            if len(summary) > 600:
-                                summary = summary[:600] + "…"
-                            chunks.append(f"[AI 思考摘要]\n{summary}")
-                    break
-
-    # 进一步回退：如果仍无内容，展示最后一个工具结果。
-    # 部分 AI 回复（如代码/文件交付）仅存在于 tool_result 中。
-    if not chunks and role == Role.ASSISTANT:
-        for part in reversed(message.parts):
-            part_type = part.type.value if hasattr(part.type, "value") else str(part.type)
-            if part_type == MessagePartType.TOOL_RESULT.value:
-                result_text = _clean(part.content or "")
-                if result_text:
-                    chunks.append(f"[工具结果]\n{result_text}")
-                    break
+    # Attachments do not count as the answer body. A message containing only an
+    # attachment plus reasoning/tool output still needs its actual delivery.
+    if not has_primary_body:
+        fallback = _fallback_visible_text(message, source_app, role)
+        if fallback:
+            append(fallback)
 
     return "\n\n".join(chunks)
 
 
 def visible_messages(conversation: Conversation) -> List[Tuple[Message, Role, str]]:
-    """返回 (message, effective_role, preview_text) 三元组。
-
-    不修改原始 message.role，避免共享对象变异副作用。
-    """
+    """返回 (message, effective_role, preview_text) 三元组，不修改原对象。"""
     result: List[Tuple[Message, Role, str]] = []
     for message in conversation.messages:
         role = effective_role(message)
@@ -323,7 +309,6 @@ def visible_messages(conversation: Conversation) -> List[Tuple[Message, Role, st
 
 def conversation_search_text(conversation: Conversation) -> str:
     """构建用于本机全文检索的标准化文本。"""
-
     parts: List[str] = [_clean(conversation.title)]
     for _message, _role, text in visible_messages(conversation):
         parts.append(text)
@@ -332,7 +317,6 @@ def conversation_search_text(conversation: Conversation) -> str:
 
 def plain_preview_text(conversation: Conversation) -> str:
     """生成可复制的用户/AI纯文本对话。"""
-
     blocks: List[str] = []
     for message, role, text in visible_messages(conversation):
         role_label = "用户" if role == Role.USER else "AI 助手"
