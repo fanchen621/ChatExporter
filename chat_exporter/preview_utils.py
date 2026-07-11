@@ -35,7 +35,12 @@ _USER_QUERY_PATTERN = re.compile(
     r"<user_query(?:\s[^>]*)?>(.*?)</user_query\s*>",
     re.IGNORECASE | re.DOTALL,
 )
-_XML_TAG_LINE = re.compile(r"^\s*</?[\w:-]+(?:\s[^>]*)?>\s*$")
+# 只移除已知的内部上下文标签行，不误杀用户消息中的 XML/HTML 内容
+_INTERNAL_TAG_LINE = re.compile(
+    rf"^\s*</?(?:{'|'.join(re.escape(t) for t in _INTERNAL_BLOCK_TAGS)})(?:\s[^>]*)?>\s*$",
+    re.IGNORECASE,
+)
+_USER_QUERY_TAG_LINE = re.compile(r"^\s*</?user_query(?:\s[^>]*)?>\s*$", re.IGNORECASE)
 _MULTI_BLANKS = re.compile(r"\n{3,}")
 _INTERNAL_LINE_PATTERNS = (
     re.compile(r"^\s*(OS Version|Shell|IDE Theme|Current working directory)\s*:", re.I),
@@ -100,7 +105,9 @@ def strip_internal_context(text: str, source_app: str = "") -> str:
             skip_until = opened_internal
             continue
 
-        if _XML_TAG_LINE.match(stripped):
+        if _INTERNAL_TAG_LINE.match(stripped):
+            continue
+        if _USER_QUERY_TAG_LINE.match(stripped):
             continue
         if any(pattern.search(stripped) for pattern in _INTERNAL_LINE_PATTERNS):
             continue
@@ -143,6 +150,15 @@ def effective_role(message: Message) -> Optional[Role]:
     if message.role in VISIBLE_ROLES:
         return message.role
 
+    # SYSTEM 消息如果只有 thinking parts，实际上是 AI 的思考过程
+    if message.role == Role.SYSTEM:
+        has_thinking = any(
+            (p.type.value if hasattr(p.type, "value") else str(p.type)) == MessagePartType.THINKING.value
+            for p in message.parts
+        )
+        if has_thinking:
+            return Role.ASSISTANT
+
     metadata = message.metadata or {}
     for key in ("raw_role", "role", "sender_role", "author_role", "speaker", "sender"):
         hinted = role_from_hint(str(metadata.get(key, "")))
@@ -176,7 +192,8 @@ def message_preview_text(message: Message, source_app: str = "") -> str:
     但不会污染预览界面。
     """
 
-    if effective_role(message) not in VISIBLE_ROLES:
+    role = effective_role(message)
+    if role not in VISIBLE_ROLES:
         return ""
 
     chunks: List[str] = []
@@ -196,21 +213,50 @@ def message_preview_text(message: Message, source_app: str = "") -> str:
         seen.add(key)
         chunks.append(value)
 
-    append(message.content)
+    # content 通常是所有 text parts 的拼接，优先使用 content 避免重复
+    if message.content and message.content.strip():
+        append(message.content)
+        # content 已包含 TEXT parts 的内容，只补充 CODE/FILE/IMAGE 等非 TEXT parts
+        for part in message.parts:
+            part_type = part.type.value if hasattr(part.type, "value") else str(part.type)
+            if part_type == MessagePartType.CODE.value:
+                language = _clean(part.language or "")
+                code = _clean(part.content)
+                if code:
+                    append(f"```{language}\n{code}\n```")
+            elif part_type in (MessagePartType.FILE.value, MessagePartType.IMAGE.value):
+                name = _clean(part.file_name or part.content or "附件")
+                append(f"[附件] {name}")
+    else:
+        # content 为空时才遍历所有 parts
+        for part in message.parts:
+            part_type = part.type.value if hasattr(part.type, "value") else str(part.type)
+            if part_type == MessagePartType.TEXT.value:
+                append(part.content)
+            elif part_type == MessagePartType.CODE.value:
+                language = _clean(part.language or "")
+                code = _clean(part.content)
+                if code:
+                    append(f"```{language}\n{code}\n```")
+            elif part_type in (MessagePartType.FILE.value, MessagePartType.IMAGE.value):
+                name = _clean(part.file_name or part.content or "附件")
+                append(f"[附件] {name}")
 
-    for part in message.parts:
-        part_type = part.type.value if hasattr(part.type, "value") else str(part.type)
-        if part_type == MessagePartType.TEXT.value:
-            append(part.content)
-        elif part_type == MessagePartType.CODE.value:
-            language = _clean(part.language or "")
-            code = _clean(part.content)
-            if code:
-                append(f"```{language}\n{code}\n```")
-        elif part_type in (MessagePartType.FILE.value, MessagePartType.IMAGE.value):
-            name = _clean(part.file_name or part.content or "附件")
-            append(f"[附件] {name}")
-        # THINKING / TOOL_CALL / TOOL_RESULT 故意不进入预览。
+    # 回退：如果 ASSISTANT 消息没有任何可见文本，但有 thinking parts，
+    # 从 thinking 中提取摘要，避免 AI 回复在预览中完全消失
+    if not chunks and role == Role.ASSISTANT:
+        for part in message.parts:
+            part_type = part.type.value if hasattr(part.type, "value") else str(part.type)
+            if part_type == MessagePartType.THINKING.value:
+                thinking_text = _clean(part.content)
+                if thinking_text:
+                    lines = [l for l in thinking_text.splitlines() if l.strip()]
+                    if lines:
+                        summary = "\n".join(lines[:8])
+                        if len(summary) > 600:
+                            summary = summary[:600] + "…"
+                        chunks.append(f"[AI 思考摘要]\n{summary}")
+                        break
 
     return "\n\n".join(chunks)
 
