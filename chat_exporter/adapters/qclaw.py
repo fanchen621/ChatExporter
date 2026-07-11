@@ -224,7 +224,7 @@ class QClawAdapter(BaseAdapter):
                     type=MessagePartType.TOOL_RESULT,
                     tool_name=prow["tool_name"],
                     tool_output=output,
-                    content=output[:5000]
+                    content=output
                 ))
             elif ptype == "file":
                 parts.append(MessagePart(

@@ -57,6 +57,21 @@ _INTERNAL_LINE_PATTERNS = (
     re.compile(r"^\s*Path:\s*[A-Za-z]:\\", re.I),
 )
 
+# TRAE SOLO CN 任务消息会把 UI 状态标签混入正文文本：
+# "查看 N 个步骤"（可折叠工具调用区标题）、"处理中..."（状态指示）、
+# "创建"/"已执行命令"/"正在执行命令"/"深度思考"/"已读取"（操作标签）、
+# "已允许高危操作"（权限提示）。这些不是真实对话内容，应过滤。
+_TRAE_UI_LINE_PATTERNS = (
+    re.compile(r"^查看\s*\d+\s*个步骤$"),
+    re.compile(r"^已允许高危操作$"),
+    re.compile(r"^处理中\.{2,}$"),
+    re.compile(r"^已执行命令$"),
+    re.compile(r"^正在执行命令$"),
+    re.compile(r"^深度思考$"),
+    re.compile(r"^已读取$"),
+    re.compile(r"^创建$"),
+)
+
 _TOOL_PLACEHOLDER_PATTERNS = (
     re.compile(r"^\s*\[(?:工具调用|tool call)\]", re.I),
     re.compile(r"^\s*(?:工具调用|tool call)\s*[:：·]", re.I),
@@ -115,6 +130,8 @@ def strip_internal_context(text: str, source_app: str = "") -> str:
         if _USER_QUERY_TAG_LINE.match(stripped):
             continue
         if any(pattern.search(stripped) for pattern in _INTERNAL_LINE_PATTERNS):
+            continue
+        if any(pattern.match(stripped) for pattern in _TRAE_UI_LINE_PATTERNS):
             continue
         kept.append(line)
 

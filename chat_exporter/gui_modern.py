@@ -20,8 +20,11 @@ from .ui_theme import FONT_LATIN, FONT_MONO, FONT_UI, Metrics, Palette, configur
 class ChatExporterGUI:
     """Modern local-first conversation archive UI."""
 
-    PREVIEW_MAX_CHARS = 2_000_000
-    PREVIEW_PART_MAX_CHARS = 200_000
+    # 预览不再截断会话尾部：取消累计字符上限，改为全量渲染 + 后台分批插入。
+    PREVIEW_MAX_CHARS = 0  # 0 表示不限制（仅用于统计）
+    PREVIEW_PART_MAX_CHARS = 600_000  # 仅作用于工具结果/思考/代码等超大附属内容，绝不截断用户/AI 正文
+    # 后台分批渲染参数，保证超大会话也不会冻结界面。
+    PREVIEW_BATCH_CHARS = 120_000
     TREE_INSERT_BATCH_SIZE = 220
     SEARCH_DEBOUNCE_MS = 180
     UI_QUEUE_POLL_MS = 25
@@ -65,6 +68,9 @@ class ChatExporterGUI:
 
         self._load_generation = 0
         self._preview_generation = 0
+        self._preview_segments = []
+        self._preview_seg_index = 0
+        self._preview_plain_text = ""
         self._tree_render_generation = 0
         self._filter_after_id = None
         self._tree_conv_map: Dict[str, Conversation] = {}
@@ -778,47 +784,37 @@ class ChatExporterGUI:
         self.preview_title_var.set(conv.title or "Untitled conversation")
         updated = conv.updated_at.strftime("%Y-%m-%d %H:%M") if conv.updated_at else "Unknown time"
         self.preview_meta_var.set(f"{conv.source_app} · {len(conv.messages)} messages · Updated {updated}")
-        self.preview_text.configure(state=tk.NORMAL)
-        self.preview_text.delete("1.0", tk.END)
-        self._preview_chars = 0
-        self._preview_truncated = False
-        if conv.messages:
-            self._render_colored_preview(conv)
-        else:
-            self._preview_insert(markdown, None)
-        self.preview_text.configure(state=tk.DISABLED)
-        suffix = " · preview truncated; export remains complete" if self._preview_truncated else ""
-        self._set_status(f"Preview ready: {len(conv.messages)} messages{suffix}", tone="success")
-        self._sync_action_states()
+        try:
+            from .preview_utils import plain_preview_text
+            plain = plain_preview_text(conv)
+        except Exception:
+            plain = ""
+        self._start_preview_render(self._build_preview_segments(conv), plain, generation)
 
     def _preview_insert(self, text: str, tag=None) -> bool:
+        # 不再因累计字符数截断：完整插入，保证会话尾部可见。
         if not text:
             return True
-        remaining = self.PREVIEW_MAX_CHARS - self._preview_chars
-        if remaining <= 0:
-            if not self._preview_truncated:
-                self.preview_text.insert(tk.END, "\n\n[Preview truncated. Export still includes the full record.]\n", "system_body")
-                self._preview_truncated = True
-            return False
-        if len(text) > remaining:
-            self.preview_text.insert(tk.END, text[:remaining], tag)
-            self.preview_text.insert(tk.END, "\n\n[Preview truncated. Export still includes the full record.]\n", "system_body")
-            self._preview_chars = self.PREVIEW_MAX_CHARS
-            self._preview_truncated = True
-            return False
         self.preview_text.insert(tk.END, text, tag)
         self._preview_chars += len(text)
         return True
 
-    def _preview_part(self, text: str) -> str:
+    def _preview_part(self, text: str, kind: str = None) -> str:
         if not text:
             return ""
+        # 用户/AI 可见正文（kind="text"）永远不截断，确保会话尾部完整。
+        if kind in (None, "text"):
+            return text
         if len(text) > self.PREVIEW_PART_MAX_CHARS:
             self._preview_truncated = True
-            return text[:self.PREVIEW_PART_MAX_CHARS] + "\n\n[This section was truncated in preview.]"
+            return text[:self.PREVIEW_PART_MAX_CHARS] + "\n\n[该段内容在预览中已截断。]"
         return text
 
-    def _render_colored_preview(self, conv: Conversation):
+    # ========== 全量、后台分批预览渲染（不再截断尾部） ==========
+
+    def _build_preview_segments(self, conv: Conversation) -> List[Tuple[str, Optional[str]]]:
+        """把整段对话拆成 (文本, 标签) 片段，完整包含会话尾部。"""
+        segments: List[Tuple[str, Optional[str]]] = []
         metadata = [
             f"# {conv.title}", "",
             f"Source: {conv.source_app}",
@@ -826,8 +822,7 @@ class ChatExporterGUI:
             f"Updated: {conv.updated_at.strftime('%Y-%m-%d %H:%M:%S') if conv.updated_at else 'N/A'}",
             f"Messages: {len(conv.messages)}", "", "────────────────────────────────────────", "",
         ]
-        if not self._preview_insert("\n".join(metadata), "meta"):
-            return
+        segments.append(("\n".join(metadata), "meta"))
 
         for msg in conv.messages:
             role_name, header_tag, body_tag = self._role_to_tags(msg.role)
@@ -837,39 +832,89 @@ class ChatExporterGUI:
                 header += f"  ·  {timestamp}"
             if msg.model:
                 header += f"  ·  {msg.model}"
-            if not self._preview_insert(header + "\n", header_tag):
-                return
-            content = self._preview_part(msg.content or "")
-            if content and not self._preview_insert(content + "\n\n", body_tag):
-                return
+            segments.append((header + "\n", header_tag))
+            content = self._preview_part(msg.content or "", "text")
+            if content:
+                segments.append((content + "\n\n", body_tag))
 
             for part in msg.parts:
                 part_type = part.type.value if hasattr(part.type, "value") else str(part.type)
                 if part_type == "tool_call":
-                    if not self._preview_insert(f"Tool call · {part.tool_name or 'Unknown'}\n", "tool_header"):
-                        return
-                    if not self._preview_insert(self._preview_part(part.tool_input or "") + "\n\n", "tool_body"):
-                        return
+                    segments.append((f"Tool call · {part.tool_name or 'Unknown'}\n", "tool_header"))
+                    segments.append((self._preview_part(part.tool_input or "", "tool") + "\n\n", "tool_body"))
                 elif part_type == "tool_result":
-                    if not self._preview_insert(f"Tool result · {part.tool_name or 'Unknown'}\n", "tool_header"):
-                        return
-                    if not self._preview_insert(self._preview_part(part.tool_output or part.content or "") + "\n\n", "tool_body"):
-                        return
+                    segments.append((f"Tool result · {part.tool_name or 'Unknown'}\n", "tool_header"))
+                    segments.append((self._preview_part(part.tool_output or part.content or "", "tool") + "\n\n", "tool_body"))
                 elif part_type == "thinking":
-                    if not self._preview_insert("Thinking\n", "system_header"):
-                        return
-                    if not self._preview_insert(self._preview_part(part.content or "") + "\n\n", "system_body"):
-                        return
+                    segments.append(("Thinking\n", "system_header"))
+                    segments.append((self._preview_part(part.content or "", "thinking") + "\n\n", "system_body"))
                 elif part_type == "code":
                     language = part.language or ""
-                    if not self._preview_insert(f"{language}\n{self._preview_part(part.content or '')}\n\n", "code"):
-                        return
+                    segments.append((f"{language}\n{self._preview_part(part.content or '', 'code')}\n\n", "code"))
                 elif part_type in ("file", "image"):
                     name = part.file_name or part.content or "Attachment"
-                    if not self._preview_insert(f"Attachment · {name}\n\n", "system_body"):
-                        return
-            if not self._preview_insert("────────────────────────────────────────\n\n", "separator"):
-                return
+                    segments.append((f"Attachment · {name}\n\n", "system_body"))
+            segments.append(("────────────────────────────────────────\n\n", "separator"))
+        return segments
+
+    def _start_preview_render(self, segments, plain_text, generation):
+        if generation != self._preview_generation:
+            return
+        self._preview_segments = list(segments) if segments else []
+        self._preview_seg_index = 0
+        self._preview_chars = 0
+        self._preview_truncated = False
+        self._preview_plain_text = plain_text or ""
+        self.preview_text.configure(state=tk.NORMAL)
+        self.preview_text.delete("1.0", tk.END)
+        self.preview_text.configure(state=tk.DISABLED)
+        total = len(self._preview_segments)
+        self._set_status(f"正在渲染预览… 共 {total} 段" if total else "正在渲染预览…", tone="info")
+        self.root.after(0, lambda: self._insert_preview_batch(generation))
+
+    def _insert_preview_batch(self, generation):
+        if generation != self._preview_generation:
+            return
+        segments = getattr(self, "_preview_segments", None)
+        if not segments:
+            self._finish_preview_render(generation)
+            return
+        self.preview_text.configure(state=tk.NORMAL)
+        i = self._preview_seg_index
+        n = len(segments)
+        inserted = 0
+        while i < n and inserted < self.PREVIEW_BATCH_CHARS:
+            text, tag = segments[i]
+            if text:
+                try:
+                    self.preview_text.insert(tk.END, text, tag)
+                except tk.TclError:
+                    self.preview_text.insert(tk.END, text)
+                inserted += len(text)
+            i += 1
+        self._preview_seg_index = i
+        self.preview_text.configure(state=tk.DISABLED)
+        if i < n:
+            remaining = n - i
+            self._set_status(f"正在渲染预览… 剩余 {remaining} 段", tone="info")
+            self.root.after(0, lambda: self._insert_preview_batch(generation))
+        else:
+            self._finish_preview_render(generation)
+
+    def _finish_preview_render(self, generation):
+        if generation != self._preview_generation:
+            return
+        self.preview_text.see("1.0")
+        refresh = getattr(self, "_refresh_preview_find", None)
+        if callable(refresh):
+            try:
+                refresh()
+            except Exception:
+                pass
+        msg_count = len(self.selected_conv.messages) if self.selected_conv else 0
+        suffix = " · 预览已截断，导出仍然完整" if self._preview_truncated else ""
+        self._set_status(f"预览完成：{msg_count} 条消息{suffix}", tone="success")
+        self._sync_action_states()
 
     @staticmethod
     def _role_to_tags(role):

@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Optional
 
 from .models import Conversation, Message, MessagePartType, Role
+from .preview_utils import effective_role, strip_internal_context
 
 
 class MarkdownExporter:
@@ -38,9 +39,10 @@ class MarkdownExporter:
         if conv.model:
             meta_lines.append(f"- **使用模型**: {conv.model}")
         if conv.messages:
-            meta_lines.append(f"- **消息数量**: {len(conv.messages)}")
-            user_count = sum(1 for m in conv.messages if m.role == Role.USER)
-            asst_count = sum(1 for m in conv.messages if m.role == Role.ASSISTANT)
+            visible_msgs = [m for m in conv.messages if effective_role(m) is not None]
+            user_count = sum(1 for m in visible_msgs if effective_role(m) == Role.USER)
+            asst_count = sum(1 for m in visible_msgs if effective_role(m) == Role.ASSISTANT)
+            meta_lines.append(f"- **消息数量**: {len(visible_msgs)}")
             meta_lines.append(f"- **对话轮次**: {user_count} 问 / {asst_count} 答")
 
         total_tokens = 0
@@ -55,8 +57,18 @@ class MarkdownExporter:
         lines.append("---")
         lines.append("")
 
-        for i, msg in enumerate(conv.messages):
-            role_label = self._get_role_label(msg.role)
+        visible = []
+        for msg in conv.messages:
+            eff_role = effective_role(msg)
+            if eff_role is None:
+                continue
+            content = self._format_message(msg, source_app=conv.source_app)
+            if not content.strip():
+                continue
+            visible.append((msg, eff_role, content))
+
+        for i, (msg, eff_role, content) in enumerate(visible):
+            role_label = self._get_role_label(eff_role)
             header = f"## {role_label}"
             if self.include_timestamp and msg.timestamp:
                 header += f" · {self._fmt_dt(msg.timestamp)}"
@@ -65,12 +77,10 @@ class MarkdownExporter:
 
             lines.append(header)
             lines.append("")
-
-            content = self._format_message(msg)
             lines.append(content)
             lines.append("")
 
-            if i < len(conv.messages) - 1:
+            if i < len(visible) - 1:
                 lines.append("---")
                 lines.append("")
 
@@ -89,14 +99,15 @@ class MarkdownExporter:
             Role.TOOL: "🔧 工具",
         }.get(role, str(role))
 
-    def _format_message(self, msg: Message) -> str:
+    def _format_message(self, msg: Message, source_app: str = "") -> str:
         parts_text = []
         main_text = msg.content
 
         has_explicit_parts = bool(msg.parts)
 
         if not has_explicit_parts:
-            return self._clean_content(main_text)
+            cleaned = strip_internal_context(main_text or "", source_app=source_app)
+            return cleaned if cleaned else self._clean_content(main_text)
 
         text_parts = []
         thinking_parts = []
@@ -124,7 +135,11 @@ class MarkdownExporter:
 
         if text_parts:
             combined = "\n".join(text_parts)
-            parts_text.append(self._clean_content(combined))
+            cleaned = strip_internal_context(combined, source_app=source_app)
+            if cleaned:
+                parts_text.append(cleaned)
+            else:
+                parts_text.append(self._clean_content(combined))
 
         if code_parts:
             for cp in code_parts:
@@ -132,8 +147,13 @@ class MarkdownExporter:
                 parts_text.append(f"\n```{lang}\n{cp.content}\n```\n")
 
         if self.include_thinking and thinking_parts:
-            for think in thinking_parts:
-                parts_text.append(f"\n<details>\n<summary>💭 思考过程</summary>\n\n```\n{think}\n```\n\n</details>\n")
+            # 合并连续思考块为一个 <details>，避免几十个折叠块堆叠。
+            # 使用 ~~~ 围栏避免与思考内容内部的 ``` 冲突。
+            combined_thinking = "\n\n---\n\n".join(
+                t.strip() for t in thinking_parts if t and t.strip()
+            )
+            if combined_thinking:
+                parts_text.append(f"\n<details>\n<summary>💭 思考过程</summary>\n\n~~~\n{combined_thinking}\n~~~\n\n</details>\n")
 
         if tool_calls:
             for tc in tool_calls:
@@ -144,9 +164,7 @@ class MarkdownExporter:
         if tool_results:
             for tr in tool_results:
                 output = tr.tool_output or tr.content or ""
-                if len(output) > 2000:
-                    output = output[:2000] + "\n... (输出已截断)"
-                parts_text.append(f"\n<details>\n<summary>📎 工具返回结果</summary>\n\n```\n{output}\n```\n\n</details>\n")
+                parts_text.append(f"\n<details>\n<summary>📎 工具返回结果</summary>\n\n~~~\n{output}\n~~~\n\n</details>\n")
 
         if file_parts:
             for fp in file_parts:
@@ -160,7 +178,8 @@ class MarkdownExporter:
 
         result = "\n".join(parts_text).strip()
         if not result:
-            result = self._clean_content(main_text)
+            cleaned = strip_internal_context(main_text or "", source_app=source_app)
+            result = cleaned if cleaned else self._clean_content(main_text)
         return result
 
     @staticmethod

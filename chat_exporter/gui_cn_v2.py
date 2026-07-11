@@ -707,15 +707,15 @@ class ChatExporterGUI(BaseChineseGUI):
         self.preview_meta_var.set(
             f"{conv.source_app} · 用户/AI 正文 {len(visible)} 条 · 更新于 {updated}"
         )
-        self.preview_text.configure(state=tk.NORMAL)
-        self.preview_text.delete("1.0", tk.END)
-        self._preview_chars = 0
-        self._preview_truncated = False
 
+        # 全量渲染 + 后台分批插入：无论会话多大，尾部都不会被截断，界面也不会卡死。
+        segments = []
         if not visible:
-            self.preview_text.insert(tk.END, "\n\n")
-            self.preview_text.insert(tk.END, "这条记录没有可显示的用户/AI 正文\n", "empty_title")
-            self.preview_text.insert(tk.END, "\n工具记录、系统消息和思考过程仍会保留在完整导出中。\n", "empty_body")
+            segments.append((
+                "\n\n这条记录没有可显示的用户/AI 正文\n\n"
+                "工具记录、系统消息和思考过程仍会保留在完整导出中。\n",
+                "empty_body",
+            ))
         else:
             for message, text in visible:
                 role_name = "用户" if message.role == Role.USER else "AI 助手"
@@ -727,16 +727,12 @@ class ChatExporterGUI(BaseChineseGUI):
                     header += f"  ·  {timestamp}"
                 if message.model and message.role == Role.ASSISTANT:
                     header += f"  ·  {message.model}"
-                if not self._preview_insert(header + "\n", header_tag):
-                    break
-                if not self._preview_insert(self._preview_part(text) + "\n\n", body_tag):
-                    break
-                if not self._preview_insert("────────────────────────────────────────\n\n", "separator"):
-                    break
+                segments.append((header + "\n", header_tag))
+                # 用户/AI 正文：kind="text" 永远不截断，确保会话尾部完整可见。
+                segments.append((self._preview_part(text or "", "text") + "\n\n", body_tag))
+                segments.append(("────────────────────────────────────────\n\n", "separator"))
 
-        self.preview_text.configure(state=tk.DISABLED)
-        self.preview_text.see("1.0")
-        self._refresh_preview_find()
+        self._start_preview_render(segments, self._preview_plain_text, generation)
         suffix = " · 预览已截断，导出仍然完整" if self._preview_truncated else ""
         self._set_status(f"预览完成：{len(visible)} 条用户/AI 正文{suffix}", tone="success")
         self._sync_action_states()
