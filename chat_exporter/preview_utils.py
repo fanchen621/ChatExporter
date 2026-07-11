@@ -271,20 +271,37 @@ def message_preview_text(message: Message, source_app: str = "") -> str:
         append(message.content)
 
     # 回退：如果 ASSISTANT 消息没有任何可见文本，但有 thinking parts，
-    # 从 thinking 中提取摘要，避免 AI 回复在预览中完全消失
+    # TRAE 的 task 消息中 reasoning_content 就是 AI 的实际回复，展示完整内容；
+    # 其他应用（如 WorkBuddy）reasoning 是内部思考，有独立文本回复，
+    # 仅展示截断摘要，不当作完整回答。
     if not chunks and role == Role.ASSISTANT:
+        is_trae = (source_app or "").casefold().startswith("trae")
         for part in message.parts:
             part_type = part.type.value if hasattr(part.type, "value") else str(part.type)
             if part_type == MessagePartType.THINKING.value:
                 thinking_text = _clean(part.content)
                 if thinking_text:
-                    lines = [l for l in thinking_text.splitlines() if l.strip()]
-                    if lines:
-                        summary = "\n".join(lines[:8])
-                        if len(summary) > 600:
-                            summary = summary[:600] + "…"
-                        chunks.append(f"[AI 思考摘要]\n{summary}")
-                        break
+                    if is_trae:
+                        chunks.append(thinking_text)
+                    else:
+                        lines = [l for l in thinking_text.splitlines() if l.strip()]
+                        if lines:
+                            summary = "\n".join(lines[:8])
+                            if len(summary) > 600:
+                                summary = summary[:600] + "…"
+                            chunks.append(f"[AI 思考摘要]\n{summary}")
+                    break
+
+    # 进一步回退：如果仍无内容，展示最后一个工具结果。
+    # 部分 AI 回复（如代码/文件交付）仅存在于 tool_result 中。
+    if not chunks and role == Role.ASSISTANT:
+        for part in reversed(message.parts):
+            part_type = part.type.value if hasattr(part.type, "value") else str(part.type)
+            if part_type == MessagePartType.TOOL_RESULT.value:
+                result_text = _clean(part.content or "")
+                if result_text:
+                    chunks.append(f"[工具结果]\n{result_text}")
+                    break
 
     return "\n\n".join(chunks)
 
