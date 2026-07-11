@@ -22,7 +22,14 @@ class QClawAdapter(BaseQClawAdapter):
             return Role.TOOL
         if any(token in normalized for token in ("system", "reasoning", "thinking", "developer")):
             return Role.SYSTEM
-        return Role.SYSTEM
+        if not normalized:
+            return Role.USER
+
+        # Unknown non-empty roles previously defaulted to SYSTEM and were then
+        # discarded by effective_role(). QClaw versions frequently introduce
+        # new assistant-side role labels, so keep them visible by default; the
+        # raw role and part types are still preserved in metadata for diagnosis.
+        return Role.ASSISTANT
 
     def _parse_message(self, msg_row, part_rows) -> Optional[Message]:
         message = super()._parse_message(msg_row, part_rows)
