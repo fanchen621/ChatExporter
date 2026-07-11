@@ -20,8 +20,8 @@ from .ui_theme import FONT_LATIN, FONT_MONO, FONT_UI, Metrics, Palette, configur
 class ChatExporterGUI:
     """Modern local-first conversation archive UI."""
 
-    PREVIEW_MAX_CHARS = 350_000
-    PREVIEW_PART_MAX_CHARS = 80_000
+    PREVIEW_MAX_CHARS = 2_000_000
+    PREVIEW_PART_MAX_CHARS = 200_000
     TREE_INSERT_BATCH_SIZE = 220
     SEARCH_DEBOUNCE_MS = 180
     UI_QUEUE_POLL_MS = 25

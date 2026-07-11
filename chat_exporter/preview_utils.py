@@ -22,6 +22,11 @@ _INTERNAL_BLOCK_TAGS = (
     "system_context",
     "tool_context",
     "agent_context",
+    "cb_summary",
+    "conversation_history_summary",
+    "memory_and_skills_reminder",
+    "additional_data",
+    "current_time",
 )
 _INTERNAL_BLOCK_PATTERNS = tuple(
     re.compile(
