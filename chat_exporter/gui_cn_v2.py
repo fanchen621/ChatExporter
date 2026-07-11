@@ -701,6 +701,7 @@ class ChatExporterGUI(BaseChineseGUI):
             return
         self.selected_conv = conv
         visible = visible_messages(conv)
+        self._preview_visible_count = len(visible)
         self._preview_plain_text = plain_preview_text(conv)
         self.preview_title_var.set(conv.title or "无标题对话")
         updated = conv.updated_at.strftime("%Y-%m-%d %H:%M") if conv.updated_at else "未知时间"
@@ -717,15 +718,15 @@ class ChatExporterGUI(BaseChineseGUI):
                 "empty_body",
             ))
         else:
-            for message, text in visible:
-                role_name = "用户" if message.role == Role.USER else "AI 助手"
-                header_tag = "user_header" if message.role == Role.USER else "assistant_header"
-                body_tag = "user_body" if message.role == Role.USER else "assistant_body"
+            for message, eff_role, text in visible:
+                role_name = "用户" if eff_role == Role.USER else "AI 助手"
+                header_tag = "user_header" if eff_role == Role.USER else "assistant_header"
+                body_tag = "user_body" if eff_role == Role.USER else "assistant_body"
                 timestamp = message.timestamp.strftime("%Y-%m-%d %H:%M:%S") if message.timestamp else ""
                 header = role_name
                 if timestamp:
                     header += f"  ·  {timestamp}"
-                if message.model and message.role == Role.ASSISTANT:
+                if message.model and eff_role == Role.ASSISTANT:
                     header += f"  ·  {message.model}"
                 segments.append((header + "\n", header_tag))
                 # 用户/AI 正文：kind="text" 永远不截断，确保会话尾部完整可见。
@@ -733,9 +734,9 @@ class ChatExporterGUI(BaseChineseGUI):
                 segments.append(("────────────────────────────────────────\n\n", "separator"))
 
         self._start_preview_render(segments, self._preview_plain_text, generation)
-        suffix = " · 预览已截断，导出仍然完整" if self._preview_truncated else ""
-        self._set_status(f"预览完成：{len(visible)} 条用户/AI 正文{suffix}", tone="success")
-        self._sync_action_states()
+        # 不在此处设置"完成"状态：_start_preview_render 是异步的（root.after 调度），
+        # 实际渲染在 _insert_preview_batch 中分批进行，完成后由 _finish_preview_render
+        # 设置最终状态和同步按钮。这里提前设置会导致状态栏闪"完成"再跳回"渲染中"。
 
     def _copy_preview_text(self):
         if not self._preview_plain_text:

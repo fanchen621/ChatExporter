@@ -131,7 +131,8 @@ def strip_internal_context(text: str, source_app: str = "") -> str:
             continue
         if any(pattern.search(stripped) for pattern in _INTERNAL_LINE_PATTERNS):
             continue
-        if any(pattern.match(stripped) for pattern in _TRAE_UI_LINE_PATTERNS):
+        # TRAE UI 行标签仅对 TRAE 源应用生效，避免误删其他应用中同名的正常文本行。
+        if source_app.casefold().startswith("trae") and any(pattern.match(stripped) for pattern in _TRAE_UI_LINE_PATTERNS):
             continue
         kept.append(line)
 
@@ -181,6 +182,16 @@ def effective_role(message: Message) -> Optional[Role]:
         if has_thinking:
             return Role.ASSISTANT
 
+    # TOOL 消息如果包含 TOOL_RESULT parts，是 AI 调用工具后的返回结果，
+    # 应作为 AI 回复的一部分展示（WorkBuddy function_call_result 等）。
+    if message.role == Role.TOOL:
+        has_tool_result = any(
+            (p.type.value if hasattr(p.type, "value") else str(p.type)) == MessagePartType.TOOL_RESULT.value
+            for p in message.parts
+        )
+        if has_tool_result:
+            return Role.ASSISTANT
+
     metadata = message.metadata or {}
     for key in ("raw_role", "role", "sender_role", "author_role", "speaker", "sender"):
         hinted = role_from_hint(str(metadata.get(key, "")))
@@ -224,7 +235,11 @@ def message_preview_text(message: Message, source_app: str = "") -> str:
     def append(text: str) -> None:
         value = strip_internal_context(text, source_app=source_app)
         if not value:
-            return
+            # 与导出器一致：strip_internal_context 清空时用原始文本兜底，
+            # 避免预览丢失消息（导出有 _clean_content 兜底，预览也应有）。
+            value = _clean(text)
+            if not value:
+                return
         if _looks_like_tool_placeholder(value, message):
             return
         if _looks_like_thinking_placeholder(value, message):
@@ -235,34 +250,25 @@ def message_preview_text(message: Message, source_app: str = "") -> str:
         seen.add(key)
         chunks.append(value)
 
-    # content 通常是所有 text parts 的拼接，优先使用 content 避免重复
-    if message.content and message.content.strip():
+    # 与导出器一致：优先从 parts 的 TEXT parts 提取正文。
+    has_text_part = False
+    for part in message.parts:
+        part_type = part.type.value if hasattr(part.type, "value") else str(part.type)
+        if part_type == MessagePartType.TEXT.value:
+            has_text_part = True
+            append(part.content)
+        elif part_type == MessagePartType.CODE.value:
+            language = _clean(part.language or "")
+            code = _clean(part.content)
+            if code:
+                append(f"```{language}\n{code}\n```")
+        elif part_type in (MessagePartType.FILE.value, MessagePartType.IMAGE.value):
+            name = _clean(part.file_name or part.content or "附件")
+            append(f"[附件] {name}")
+
+    # 回退：parts 中没有 TEXT parts 时，用 content 作为正文来源。
+    if not has_text_part and message.content and message.content.strip():
         append(message.content)
-        # content 已包含 TEXT parts 的内容，只补充 CODE/FILE/IMAGE 等非 TEXT parts
-        for part in message.parts:
-            part_type = part.type.value if hasattr(part.type, "value") else str(part.type)
-            if part_type == MessagePartType.CODE.value:
-                language = _clean(part.language or "")
-                code = _clean(part.content)
-                if code:
-                    append(f"```{language}\n{code}\n```")
-            elif part_type in (MessagePartType.FILE.value, MessagePartType.IMAGE.value):
-                name = _clean(part.file_name or part.content or "附件")
-                append(f"[附件] {name}")
-    else:
-        # content 为空时才遍历所有 parts
-        for part in message.parts:
-            part_type = part.type.value if hasattr(part.type, "value") else str(part.type)
-            if part_type == MessagePartType.TEXT.value:
-                append(part.content)
-            elif part_type == MessagePartType.CODE.value:
-                language = _clean(part.language or "")
-                code = _clean(part.content)
-                if code:
-                    append(f"```{language}\n{code}\n```")
-            elif part_type in (MessagePartType.FILE.value, MessagePartType.IMAGE.value):
-                name = _clean(part.file_name or part.content or "附件")
-                append(f"[附件] {name}")
 
     # 回退：如果 ASSISTANT 消息没有任何可见文本，但有 thinking parts，
     # 从 thinking 中提取摘要，避免 AI 回复在预览中完全消失
@@ -283,17 +289,18 @@ def message_preview_text(message: Message, source_app: str = "") -> str:
     return "\n\n".join(chunks)
 
 
-def visible_messages(conversation: Conversation) -> List[Tuple[Message, str]]:
-    result: List[Tuple[Message, str]] = []
+def visible_messages(conversation: Conversation) -> List[Tuple[Message, Role, str]]:
+    """返回 (message, effective_role, preview_text) 三元组。
+
+    不修改原始 message.role，避免共享对象变异副作用。
+    """
+    result: List[Tuple[Message, Role, str]] = []
     for message in conversation.messages:
         role = effective_role(message)
         text = message_preview_text(message, source_app=conversation.source_app)
         if not text or role not in VISIBLE_ROLES:
             continue
-        if message.role != role:
-            # 只修复内存中的显示模型，原始角色仍保留在 metadata 中。
-            message.role = role
-        result.append((message, text))
+        result.append((message, role, text))
     return result
 
 
@@ -301,7 +308,7 @@ def conversation_search_text(conversation: Conversation) -> str:
     """构建用于本机全文检索的标准化文本。"""
 
     parts: List[str] = [_clean(conversation.title)]
-    for _message, text in visible_messages(conversation):
+    for _message, _role, text in visible_messages(conversation):
         parts.append(text)
     return "\n".join(parts).casefold()
 
@@ -310,9 +317,9 @@ def plain_preview_text(conversation: Conversation) -> str:
     """生成可复制的用户/AI纯文本对话。"""
 
     blocks: List[str] = []
-    for message, text in visible_messages(conversation):
-        role = "用户" if effective_role(message) == Role.USER else "AI 助手"
+    for message, role, text in visible_messages(conversation):
+        role_label = "用户" if role == Role.USER else "AI 助手"
         timestamp = message.timestamp.strftime("%Y-%m-%d %H:%M:%S") if message.timestamp else ""
-        header = role if not timestamp else f"{role} · {timestamp}"
+        header = role_label if not timestamp else f"{role_label} · {timestamp}"
         blocks.append(f"{header}\n{text}")
     return "\n\n".join(blocks)

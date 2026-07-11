@@ -202,7 +202,7 @@ class QClawAdapter(BaseAdapter):
         role = self._parse_role(role_str)
 
         parts = []
-        text_content = msg_row["content"] or ""
+        db_content = msg_row["content"] or ""
 
         for prow in part_rows:
             ptype = (prow["part_type"] or "").lower()
@@ -240,13 +240,20 @@ class QClawAdapter(BaseAdapter):
                 if txt:
                     parts.append(MessagePart(type=MessagePartType.TEXT, content=txt))
 
-        # 有些版本没有 message_parts 或 parts 不完整，至少保留 messages.content。
-        if text_content and not any(p.type == MessagePartType.TEXT and p.content == text_content for p in parts):
-            parts.insert(0, MessagePart(type=MessagePartType.TEXT, content=text_content))
+        # content 统一为 parts 中 TEXT parts 的换行连接。
+        # 若 parts 中没有 TEXT part 但数据库 content 有值，则用 content 补一个 TEXT part。
+        text_parts = [p.content for p in parts if p.type == MessagePartType.TEXT and p.content]
+        if text_parts:
+            content = "\n".join(text_parts)
+        elif db_content:
+            parts.insert(0, MessagePart(type=MessagePartType.TEXT, content=db_content))
+            content = db_content
+        else:
+            content = ""
 
         return Message(
             role=role,
-            content=text_content,
+            content=content,
             timestamp=self._parse_dt(msg_row["created_at"]),
             message_id=str(msg_row["message_id"]),
             parts=parts,

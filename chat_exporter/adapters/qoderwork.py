@@ -170,7 +170,7 @@ class QoderWorkAdapter(BaseAdapter):
             pass
 
         parts = []
-        text_content = ""
+        text_parts_list = []
 
         for part in parts_data:
             if not isinstance(part, dict):
@@ -181,7 +181,7 @@ class QoderWorkAdapter(BaseAdapter):
                 text = part.get("text", "")
                 if text:
                     parts.append(MessagePart(type=MessagePartType.TEXT, content=text))
-                    text_content += text
+                    text_parts_list.append(text)
             elif ptype == "tool-Thinking":
                 thinking = part.get("input", {}).get("text", "") if isinstance(part.get("input"), dict) else ""
                 if thinking:
@@ -208,7 +208,8 @@ class QoderWorkAdapter(BaseAdapter):
                     content=code,
                     language=lang,
                 ))
-                text_content += f"\n```{lang}\n{code}\n```\n"
+
+        text_content = "\n".join(text_parts_list) if text_parts_list else ""
 
         token_usage = None
         try:

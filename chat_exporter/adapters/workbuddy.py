@@ -406,9 +406,12 @@ class WorkBuddyAdapter(BaseAdapter):
         role_str = record.get("role", "")
 
         if rec_type == "reasoning":
+            # content 留空：reasoning 是思考过程，不应作为 AI 正文显示在预览中。
+            # 思考内容仅存于 THINKING part，导出时折叠在 <details> 中，
+            # 预览时由 message_preview_text 的 THINKING 摘要回退逻辑处理。
             return Message(
                 role=Role.SYSTEM,
-                content=record.get("content", "") if isinstance(record.get("content"), str) else "",
+                content="",
                 timestamp=self._ts_to_dt(record.get("timestamp"), ms=True),
                 message_id=record.get("id"),
                 parent_id=record.get("parentId"),
@@ -478,11 +481,9 @@ class WorkBuddyAdapter(BaseAdapter):
                     metadata={"path": img_path}
                 ))
 
+        # content 仅包含文本部分，图片信息由 IMAGE parts 结构化携带。
+        # 避免预览/导出时 content 兜底与 IMAGE parts 重复展示图片描述。
         content = "\n".join(text_parts)
-        if images:
-            content += "\n\n[附件图片]"
-            for img in images:
-                content += f"\n- {img['name']}"
 
         provider_data = record.get("providerData", {})
         model = provider_data.get("model") if isinstance(provider_data, dict) else None

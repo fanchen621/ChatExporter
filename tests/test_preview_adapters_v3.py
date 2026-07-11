@@ -65,7 +65,9 @@ Path: C:\\ProgramData\\WorkBuddy\\SOUL.md
         )
         visible = visible_messages(conversation)
         self.assertEqual(len(visible), 1)
-        self.assertEqual(visible[0][0].role, Role.USER)
+        # visible_messages 返回 (message, effective_role, text) 三元组，
+        # 不再修改 message.role，所以用 [1] 取 effective_role。
+        self.assertEqual(visible[0][1], Role.USER)
 
     def test_plain_preview_contains_only_user_and_assistant(self):
         conversation = Conversation(

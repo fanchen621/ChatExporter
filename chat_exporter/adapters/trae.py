@@ -733,7 +733,15 @@ class TraeAdapter(BaseAdapter):
                     except Exception:
                         pass
 
-                role = Role.USER if msg_role == "user" else Role.ASSISTANT
+                # 完整角色映射，不再简单二元化（避免 system 消息被误判为 AI 回复）。
+                if msg_role == "user":
+                    role = Role.USER
+                elif msg_role in ("assistant", "ai", "bot", "model"):
+                    role = Role.ASSISTANT
+                elif msg_role in ("system", "developer"):
+                    role = Role.SYSTEM
+                else:
+                    role = Role.ASSISTANT
 
                 if msg_type == "general":
                     cursor.execute("""
@@ -743,7 +751,7 @@ class TraeAdapter(BaseAdapter):
                     gen_row = cursor.fetchone()
                     if gen_row:
                         parts = self._parse_general_content(gen_row["content"])
-                        text = " ".join(p.content for p in parts if p.type == MessagePartType.TEXT)
+                        text = "\n".join(p.content for p in parts if p.type == MessagePartType.TEXT and p.content)
                         messages.append(Message(
                             role=role,
                             content=text,
@@ -761,20 +769,10 @@ class TraeAdapter(BaseAdapter):
                     task_row = cursor.fetchone()
                     if task_row:
                         parts = self._parse_task_content(task_row["content"])
-                        summary = (task_row["summary"] or "").strip() if task_row["summary"] else ""
-                        if summary:
-                            text = summary
-                        else:
-                            # 优先使用真正的助手/用户文本，避免把思考过程当成正文展示
-                            text_parts = [p.content for p in parts if p.type == MessagePartType.TEXT and p.content]
-                            text = "\n\n".join(text_parts) if text_parts else ""
-                            # 完全没有正文时，才用思考过程作为兜底（不在这里截断，上游预览会按 600 字摘要）
-                            if not text:
-                                thinking = next(
-                                    (p.content for p in parts if p.type == MessagePartType.THINKING and p.content),
-                                    "",
-                                )
-                                text = thinking
+                        # content 统一为 parts 中 TEXT parts 的换行连接，不再用 summary 替代。
+                        # summary 仅用于对话列表标题候选，不进入 Message.content。
+                        text_parts = [p.content for p in parts if p.type == MessagePartType.TEXT and p.content]
+                        text = "\n".join(text_parts) if text_parts else ""
                         messages.append(Message(
                             role=role,
                             content=text,
@@ -849,7 +847,8 @@ class TraeAdapter(BaseAdapter):
                     pdata = payload.get("data", {}) or {}
                     query = pdata.get("parsed_query") or []
                     if isinstance(query, list) and query:
-                        text = query[0] if isinstance(query[0], str) else str(query[0])
+                        # 合并所有 query 元素，不仅取第一个（避免丢失多段输入）。
+                        text = "\n".join(str(q) for q in query if q)
                         if text:
                             parts.append(MessagePart(type=MessagePartType.TEXT, content=text))
                 elif mtype in ("text", "assistant_message"):

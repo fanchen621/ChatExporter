@@ -662,98 +662,10 @@ class ChatExporterGUI(ModernGUI):
         self.preview_text.insert(tk.END, f"\n{error}\n", "empty_body")
         self.preview_text.configure(state=tk.DISABLED)
         self.preview_meta_var.set("读取失败，请刷新来源后重试")
-
-    def _show_preview(self, markdown: str, conv: Conversation, generation: int):
-        if generation != self._preview_generation:
-            return
-        self.selected_conv = conv
-        self.preview_title_var.set(conv.title or "无标题对话")
-        updated = conv.updated_at.strftime("%Y-%m-%d %H:%M") if conv.updated_at else "未知时间"
-        self.preview_meta_var.set(f"{conv.source_app} · {len(conv.messages)} 条消息 · 更新于 {updated}")
-        self.preview_text.configure(state=tk.NORMAL)
-        self.preview_text.delete("1.0", tk.END)
-        self._preview_chars = 0
-        self._preview_truncated = False
-        if conv.messages:
-            self._render_colored_preview(conv)
-        else:
-            self._preview_insert(markdown, None)
-        self.preview_text.configure(state=tk.DISABLED)
-        suffix = " · 预览已截断，导出仍然完整" if self._preview_truncated else ""
-        self._set_status(f"预览完成：{len(conv.messages)} 条消息{suffix}", tone="success")
-        self._sync_action_states()
-
-    # 本类不再重写 _preview_insert / _preview_part。
-    # 这两个方法直接继承自 gui_modern（ModernGUI）：已取消累计字符上限、
-    # 用户/AI 正文永远不截断，仅工具结果/思考/代码等超大附属内容按需截断。
-    # 之前在此重复实现的“累计 2,000,000 字符后 break”版本会遮蔽基类修复，
-    # 正是“预览会话尾部被砍掉”的根因，现已移除。
-
-    def _render_colored_preview(self, conv: Conversation):
-        metadata = [
-            f"# {conv.title}",
-            "",
-            f"来源：{conv.source_app}",
-            f"创建时间：{conv.created_at.strftime('%Y-%m-%d %H:%M:%S') if conv.created_at else '无'}",
-            f"更新时间：{conv.updated_at.strftime('%Y-%m-%d %H:%M:%S') if conv.updated_at else '无'}",
-            f"消息数量：{len(conv.messages)}",
-            "",
-            "────────────────────────────────────────",
-            "",
-        ]
-        if not self._preview_insert("\n".join(metadata), "meta"):
-            return
-
-        for msg in conv.messages:
-            role_name, header_tag, body_tag = self._role_to_tags(msg.role)
-            timestamp = msg.timestamp.strftime("%Y-%m-%d %H:%M:%S") if msg.timestamp else ""
-            header = role_name
-            if timestamp:
-                header += f"  ·  {timestamp}"
-            if msg.model:
-                header += f"  ·  {msg.model}"
-            if not self._preview_insert(header + "\n", header_tag):
-                return
-            content = self._preview_part(msg.content or "")
-            if content and not self._preview_insert(content + "\n\n", body_tag):
-                return
-
-            for part in msg.parts:
-                part_type = part.type.value if hasattr(part.type, "value") else str(part.type)
-                if part_type == "tool_call":
-                    if not self._preview_insert(f"工具调用 · {part.tool_name or '未知工具'}\n", "tool_header"):
-                        return
-                    if not self._preview_insert(self._preview_part(part.tool_input or "") + "\n\n", "tool_body"):
-                        return
-                elif part_type == "tool_result":
-                    if not self._preview_insert(f"工具结果 · {part.tool_name or '未知工具'}\n", "tool_header"):
-                        return
-                    if not self._preview_insert(self._preview_part(part.tool_output or part.content or "") + "\n\n", "tool_body"):
-                        return
-                elif part_type == "thinking":
-                    if not self._preview_insert("思考过程\n", "system_header"):
-                        return
-                    if not self._preview_insert(self._preview_part(part.content or "") + "\n\n", "system_body"):
-                        return
-                elif part_type == "code":
-                    language = part.language or "代码"
-                    if not self._preview_insert(f"{language}\n{self._preview_part(part.content or '')}\n\n", "code"):
-                        return
-                elif part_type in ("file", "image"):
-                    name = part.file_name or part.content or "附件"
-                    if not self._preview_insert(f"附件 · {name}\n\n", "system_body"):
-                        return
-            if not self._preview_insert("────────────────────────────────────────\n\n", "separator"):
-                return
-
-    @staticmethod
-    def _role_to_tags(role):
-        return {
-            Role.USER: ("用户", "user_header", "user_body"),
-            Role.ASSISTANT: ("AI 助手", "assistant_header", "assistant_body"),
-            Role.TOOL: ("工具", "tool_header", "tool_body"),
-            Role.SYSTEM: ("系统", "system_header", "system_body"),
-        }.get(role, ("未知角色", "system_header", "system_body"))
+    # _show_preview / _render_colored_preview / _role_to_tags 已移除：
+    # 活动路径 gui_cn_v2._show_preview 使用 visible_messages + _start_preview_render
+    # （后台分批渲染），不再需要这些旧方法。_preview_insert / _preview_part
+    # 继承自 gui_modern（已取消累计上限，正文永不截断）。
 
     # ========== 中文密钥助手 ==========
 
