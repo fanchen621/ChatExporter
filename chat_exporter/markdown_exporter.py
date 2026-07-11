@@ -27,6 +27,18 @@ class MarkdownExporter:
     def _build_markdown(self, conv: Conversation) -> str:
         lines = []
 
+        # Build the final chapter list first. Metadata must describe what was
+        # actually exported, not every low-level database record.
+        visible = []
+        for msg in conv.messages:
+            eff_role = effective_role(msg)
+            if eff_role is None:
+                continue
+            content = self._format_message(msg, source_app=conv.source_app)
+            if not content.strip():
+                continue
+            visible.append((msg, eff_role, content))
+
         lines.append(f"# {conv.title or '(无标题对话)'}")
         lines.append("")
 
@@ -39,10 +51,9 @@ class MarkdownExporter:
         if conv.model:
             meta_lines.append(f"- **使用模型**: {conv.model}")
         if conv.messages:
-            visible_msgs = [m for m in conv.messages if effective_role(m) is not None]
-            user_count = sum(1 for m in visible_msgs if effective_role(m) == Role.USER)
-            asst_count = sum(1 for m in visible_msgs if effective_role(m) == Role.ASSISTANT)
-            meta_lines.append(f"- **消息数量**: {len(visible_msgs)}")
+            user_count = sum(1 for _msg, role, _content in visible if role == Role.USER)
+            asst_count = sum(1 for _msg, role, _content in visible if role == Role.ASSISTANT)
+            meta_lines.append(f"- **消息数量**: {len(visible)}")
             meta_lines.append(f"- **对话轮次**: {user_count} 问 / {asst_count} 答")
 
         total_tokens = 0
@@ -56,16 +67,6 @@ class MarkdownExporter:
         lines.append("")
         lines.append("---")
         lines.append("")
-
-        visible = []
-        for msg in conv.messages:
-            eff_role = effective_role(msg)
-            if eff_role is None:
-                continue
-            content = self._format_message(msg, source_app=conv.source_app)
-            if not content.strip():
-                continue
-            visible.append((msg, eff_role, content))
 
         for i, (msg, eff_role, content) in enumerate(visible):
             role_label = self._get_role_label(eff_role)
@@ -98,6 +99,34 @@ class MarkdownExporter:
             Role.SYSTEM: "⚙️ 系统",
             Role.TOOL: "🔧 工具",
         }.get(role, str(role))
+
+    @staticmethod
+    def _fallback_body(thinking_parts, tool_results, source_app: str) -> str:
+        """Return the readable body used when a message has no TEXT parts.
+
+        Some TRAE task rows store the final delivery in reasoning parts, while
+        some clients store it only in a tool result. Previously those records
+        existed in the detailed blocks but had no visible body, which looked
+        like an incomplete export.
+        """
+        cleaned_thinking = [str(item).strip() for item in thinking_parts if item and str(item).strip()]
+        if cleaned_thinking:
+            if (source_app or "").casefold().startswith("trae"):
+                return "\n\n---\n\n".join(cleaned_thinking)
+
+            lines = [line for line in cleaned_thinking[0].splitlines() if line.strip()]
+            if lines:
+                summary = "\n".join(lines[:8])
+                if len(summary) > 600:
+                    summary = summary[:600] + "…"
+                return f"[AI 思考摘要]\n{summary}"
+
+        for result in reversed(tool_results):
+            output = result.tool_output or result.content or ""
+            output = str(output).strip()
+            if output:
+                return f"[工具结果]\n{output}"
+        return ""
 
     def _format_message(self, msg: Message, source_app: str = "") -> str:
         parts_text = []
@@ -140,6 +169,10 @@ class MarkdownExporter:
                 parts_text.append(cleaned)
             else:
                 parts_text.append(self._clean_content(combined))
+        else:
+            fallback = self._fallback_body(thinking_parts, tool_results, source_app)
+            if fallback:
+                parts_text.append(fallback)
 
         if code_parts:
             for cp in code_parts:
@@ -163,7 +196,7 @@ class MarkdownExporter:
 
         if tool_results:
             for tr in tool_results:
-                output = tr.tool_output or tr.content or ""
+                output = str(tr.tool_output or tr.content or "")
                 parts_text.append(f"\n<details>\n<summary>📎 工具返回结果</summary>\n\n~~~\n{output}\n~~~\n\n</details>\n")
 
         if file_parts:
