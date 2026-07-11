@@ -71,6 +71,7 @@ class ChatExporterGUI:
         self._preview_segments = []
         self._preview_seg_index = 0
         self._preview_plain_text = ""
+        self._preview_visible_count = 0
         self._tree_render_generation = 0
         self._filter_after_id = None
         self._tree_conv_map: Dict[str, Conversation] = {}
@@ -833,7 +834,10 @@ class ChatExporterGUI:
             if msg.model:
                 header += f"  ·  {msg.model}"
             segments.append((header + "\n", header_tag))
-            content = self._preview_part(msg.content or "", "text")
+            # 正文统一使用 message_preview_text，与活动路径 gui_cn_v2._show_preview 一致
+            from .preview_utils import message_preview_text
+            body_text = message_preview_text(msg, source_app=conv.source_app)
+            content = self._preview_part(body_text or "", "text")
             if content:
                 segments.append((content + "\n\n", body_tag))
 
@@ -911,9 +915,9 @@ class ChatExporterGUI:
                 refresh()
             except Exception:
                 pass
-        msg_count = len(self.selected_conv.messages) if self.selected_conv else 0
+        visible_count = getattr(self, "_preview_visible_count", 0)
         suffix = " · 预览已截断，导出仍然完整" if self._preview_truncated else ""
-        self._set_status(f"预览完成：{msg_count} 条消息{suffix}", tone="success")
+        self._set_status(f"预览完成：{visible_count} 条用户/AI 正文{suffix}", tone="success")
         self._sync_action_states()
 
     @staticmethod
