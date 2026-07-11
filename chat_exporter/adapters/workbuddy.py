@@ -433,15 +433,20 @@ class WorkBuddyAdapter(BaseAdapter):
             )
 
         if rec_type == "function_call_result":
+            # WorkBuddy 的 function_call_result 结果在 output 字段，不在 content 字段。
+            # output 可能是 dict({"type":"text","text":"..."}) 或 list([{...}])，
+            # _extract_text 已兼容这两种格式。
+            raw_output = record.get("output", record.get("content", ""))
+            text = self._extract_text(raw_output)
             return Message(
                 role=Role.TOOL,
-                content=self._extract_text(record.get("content", "")),
+                content=text,
                 timestamp=self._ts_to_dt(record.get("timestamp"), ms=True),
                 message_id=record.get("id"),
                 parts=[MessagePart(
                     type=MessagePartType.TOOL_RESULT,
                     tool_name=record.get("name"),
-                    tool_output=self._extract_text(record.get("content", ""))
+                    tool_output=text
                 )]
             )
 
