@@ -841,15 +841,22 @@ class ChatExporterGUI:
             if content:
                 segments.append((content + "\n\n", body_tag))
 
+            # 判断 message_preview_text 是否使用了回退内容（thinking/tool_result 作为正文）
+            has_text_part = any(
+                (p.type.value if hasattr(p.type, "value") else str(p.type)) == "text"
+                for p in msg.parts
+            )
+            skip_fallback_parts = bool(body_text) and not has_text_part
+
             for part in msg.parts:
                 part_type = part.type.value if hasattr(part.type, "value") else str(part.type)
                 if part_type == "tool_call":
                     segments.append((f"Tool call · {part.tool_name or 'Unknown'}\n", "tool_header"))
                     segments.append((self._preview_part(part.tool_input or "", "tool") + "\n\n", "tool_body"))
-                elif part_type == "tool_result":
+                elif part_type == "tool_result" and not skip_fallback_parts:
                     segments.append((f"Tool result · {part.tool_name or 'Unknown'}\n", "tool_header"))
                     segments.append((self._preview_part(part.tool_output or part.content or "", "tool") + "\n\n", "tool_body"))
-                elif part_type == "thinking":
+                elif part_type == "thinking" and not skip_fallback_parts:
                     segments.append(("Thinking\n", "system_header"))
                     segments.append((self._preview_part(part.content or "", "thinking") + "\n\n", "system_body"))
                 elif part_type == "code":
