@@ -765,9 +765,16 @@ class TraeAdapter(BaseAdapter):
                         if summary:
                             text = summary
                         else:
-                            thinking = next((p.content for p in parts
-                                             if p.type == MessagePartType.THINKING and p.content), "")
-                            text = thinking[:500] if thinking else " ".join(p.content for p in parts if p.content)[:500]
+                            # 优先使用真正的助手/用户文本，避免把思考过程当成正文展示
+                            text_parts = [p.content for p in parts if p.type == MessagePartType.TEXT and p.content]
+                            text = "\n\n".join(text_parts) if text_parts else ""
+                            # 完全没有正文时，才用思考过程作为兜底（不在这里截断，上游预览会按 600 字摘要）
+                            if not text:
+                                thinking = next(
+                                    (p.content for p in parts if p.type == MessagePartType.THINKING and p.content),
+                                    "",
+                                )
+                                text = thinking
                         messages.append(Message(
                             role=role,
                             content=text,
@@ -785,10 +792,10 @@ class TraeAdapter(BaseAdapter):
                         sub_row = cursor.fetchone()
                         if sub_row:
                             raw = sub_row["content"] or ""
-                            parts = [MessagePart(type=MessagePartType.TEXT, content=raw[:5000])]
+                            parts = [MessagePart(type=MessagePartType.TEXT, content=raw)]
                             messages.append(Message(
                                 role=role,
-                                content=raw[:500],
+                                content=raw,
                                 timestamp=ts,
                                 message_id=msg_id,
                                 parts=parts,
@@ -870,12 +877,12 @@ class TraeAdapter(BaseAdapter):
                         tout = json.dumps(tout, ensure_ascii=False, indent=2)
                     parts.append(MessagePart(
                         type=MessagePartType.TOOL_RESULT,
-                        content=str(tout)[:5000],
+                        content=str(tout),
                         tool_output=str(tout),
                     ))
         except Exception:
             if content_json:
-                parts.append(MessagePart(type=MessagePartType.TEXT, content=content_json[:2000]))
+                parts.append(MessagePart(type=MessagePartType.TEXT, content=content_json))
         return parts
 
     def _extract_plan_item_parts(self, plan: dict, parts: List[MessagePart]):
@@ -907,14 +914,14 @@ class TraeAdapter(BaseAdapter):
                 if err:
                     content = f"[{status}] {err}"
                 elif isinstance(rdata, (dict, list)) and rdata:
-                    content = json.dumps(rdata, ensure_ascii=False, indent=2)[:5000]
+                    content = json.dumps(rdata, ensure_ascii=False, indent=2)
                 else:
                     content = f"[{status}]" if status else ""
                 if content:
                     parts.append(MessagePart(
                         type=MessagePartType.TOOL_RESULT,
                         content=content,
-                        tool_output=json.dumps(tresult, ensure_ascii=False)[:10000],
+                        tool_output=json.dumps(tresult, ensure_ascii=False),
                     ))
 
     # ========== 日志解析（快速回退方案） ==========

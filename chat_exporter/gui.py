@@ -33,8 +33,8 @@ class ChatExporterGUI:
     COLOR_HOVER = "#f8fafc"
     COLOR_SELECTED = "#dbeafe"
 
-    PREVIEW_MAX_CHARS = 2_000_000
-    PREVIEW_PART_MAX_CHARS = 200_000
+    PREVIEW_MAX_CHARS = 0  # 0 表示不限制（仅用于统计）
+    PREVIEW_PART_MAX_CHARS = 600_000  # 仅作用于工具结果/思考/代码等超大附属内容，绝不截断用户/AI 正文
     TREE_INSERT_BATCH_SIZE = 250
     SEARCH_DEBOUNCE_MS = 180
 
@@ -684,30 +684,19 @@ class ChatExporterGUI:
         self._set_status(f"已加载: {conv.title} ({len(conv.messages)}条消息{suffix})")
 
     def _preview_insert(self, text: str, tag=None) -> bool:
+        # 不再因累计字符数截断：完整插入，保证会话尾部可见。
         if not text:
             return True
-        remaining = self.PREVIEW_MAX_CHARS - self._preview_chars
-        if remaining <= 0:
-            if not self._preview_truncated:
-                self.preview_text.insert(tk.END, "\n\n[预览已截断；导出文件仍会保留完整内容。]\n", "system_body")
-                self._preview_truncated = True
-            return False
-
-        if len(text) > remaining:
-            text = text[:remaining]
-            self.preview_text.insert(tk.END, text, tag)
-            self.preview_text.insert(tk.END, "\n\n[预览已截断；导出文件仍会保留完整内容。]\n", "system_body")
-            self._preview_chars = self.PREVIEW_MAX_CHARS
-            self._preview_truncated = True
-            return False
-
         self.preview_text.insert(tk.END, text, tag)
         self._preview_chars += len(text)
         return True
 
-    def _preview_part(self, text: str) -> str:
+    def _preview_part(self, text: str, kind: str = None) -> str:
         if not text:
             return ""
+        # 用户/AI 可见正文（kind="text"）永远不截断；仅工具结果/思考/代码等超大附属内容按需截断。
+        if kind in (None, "text"):
+            return text
         if len(text) > self.PREVIEW_PART_MAX_CHARS:
             self._preview_truncated = True
             return text[:self.PREVIEW_PART_MAX_CHARS] + "\n\n[该段预览已截断；导出文件仍保留完整内容。]"

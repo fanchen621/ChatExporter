@@ -683,32 +683,11 @@ class ChatExporterGUI(ModernGUI):
         self._set_status(f"预览完成：{len(conv.messages)} 条消息{suffix}", tone="success")
         self._sync_action_states()
 
-    def _preview_insert(self, text: str, tag=None) -> bool:
-        if not text:
-            return True
-        remaining = self.PREVIEW_MAX_CHARS - self._preview_chars
-        if remaining <= 0:
-            if not self._preview_truncated:
-                self.preview_text.insert(tk.END, "\n\n[预览已截断；导出文件仍包含完整内容。]\n", "system_body")
-                self._preview_truncated = True
-            return False
-        if len(text) > remaining:
-            self.preview_text.insert(tk.END, text[:remaining], tag)
-            self.preview_text.insert(tk.END, "\n\n[预览已截断；导出文件仍包含完整内容。]\n", "system_body")
-            self._preview_chars = self.PREVIEW_MAX_CHARS
-            self._preview_truncated = True
-            return False
-        self.preview_text.insert(tk.END, text, tag)
-        self._preview_chars += len(text)
-        return True
-
-    def _preview_part(self, text: str) -> str:
-        if not text:
-            return ""
-        if len(text) > self.PREVIEW_PART_MAX_CHARS:
-            self._preview_truncated = True
-            return text[:self.PREVIEW_PART_MAX_CHARS] + "\n\n[该段内容在预览中已截断。]"
-        return text
+    # 本类不再重写 _preview_insert / _preview_part。
+    # 这两个方法直接继承自 gui_modern（ModernGUI）：已取消累计字符上限、
+    # 用户/AI 正文永远不截断，仅工具结果/思考/代码等超大附属内容按需截断。
+    # 之前在此重复实现的“累计 2,000,000 字符后 break”版本会遮蔽基类修复，
+    # 正是“预览会话尾部被砍掉”的根因，现已移除。
 
     def _render_colored_preview(self, conv: Conversation):
         metadata = [
