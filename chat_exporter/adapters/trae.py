@@ -760,6 +760,12 @@ class TraeAdapter(BaseAdapter):
                             parts=parts,
                             model=model,
                         ))
+                    else:
+                        # 内容子表无行时不丢弃消息（避免计数不一致和尾部消息丢失）。
+                        messages.append(Message(
+                            role=role, content="", timestamp=ts,
+                            message_id=msg_id, parts=[], model=model,
+                        ))
 
                 elif msg_type == "task":
                     cursor.execute("""
@@ -780,6 +786,11 @@ class TraeAdapter(BaseAdapter):
                             message_id=msg_id,
                             parts=parts,
                             model=model,
+                        ))
+                    else:
+                        messages.append(Message(
+                            role=role, content="", timestamp=ts,
+                            message_id=msg_id, parts=[], model=model,
                         ))
                 else:
                     for subtable in ["chat_message_general", "chat_message_task"]:
@@ -814,7 +825,7 @@ class TraeAdapter(BaseAdapter):
             if isinstance(data, list):
                 for item in data:
                     if isinstance(item, dict):
-                        text = item.get("text_content") or item.get("text") or ""
+                        text = item.get("text_content") or item.get("text") or item.get("content") or ""
                         if text:
                             parts.append(MessagePart(type=MessagePartType.TEXT, content=text))
             elif isinstance(data, dict):
@@ -879,6 +890,17 @@ class TraeAdapter(BaseAdapter):
                         content=str(tout),
                         tool_output=str(tout),
                     ))
+                else:
+                    # 兜底：未识别的消息类型不丢弃，尝试常见文本字段，
+                    # 都取不到时用 JSON 全文保留，避免最终交付结果丢失。
+                    fallback_text = (
+                        msg.get("text") or msg.get("content") or msg.get("result")
+                        or msg.get("output") or msg.get("answer") or msg.get("message") or ""
+                    )
+                    if not fallback_text:
+                        fallback_text = json.dumps(msg, ensure_ascii=False, indent=2)
+                    if fallback_text:
+                        parts.append(MessagePart(type=MessagePartType.TEXT, content=str(fallback_text)))
         except Exception:
             if content_json:
                 parts.append(MessagePart(type=MessagePartType.TEXT, content=content_json))
