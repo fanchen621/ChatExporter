@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import ctypes
 import tkinter as tk
 from tkinter import messagebox, ttk
 
@@ -47,6 +49,22 @@ class ChatExporterGUI(BaseChineseGUI):
         x = max(0, (screen_w - width) // 2)
         y = max(0, (screen_h - height) // 3)
         self.root.geometry(f"{width}x{height}+{x}+{y}")
+        self._enable_double_buffering()
+
+    def _enable_double_buffering(self):
+        """启用 Windows WS_EX_COMPOSITED 双缓冲，消除窗口缩放时的闪烁。"""
+        if os.name != "nt":
+            return
+        try:
+            self.root.update_idletasks()
+            hwnd = self.root.winfo_id()
+            GWL_EXSTYLE = -20
+            WS_EX_COMPOSITED = 0x02000000
+            user32 = ctypes.windll.user32
+            ex_style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_COMPOSITED)
+        except Exception:
+            pass
 
     # ========== 自适应外壳：禁止固定高度裁切 ==========
 
@@ -59,7 +77,8 @@ class ChatExporterGUI(BaseChineseGUI):
 
         sidebar = ttk.Frame(self.root, style="Sidebar.TFrame", width=self.SIDEBAR_WIDTH)
         sidebar.grid(row=0, column=0, sticky="nsew")
-        sidebar.grid_propagate(False)
+        # 不使用 grid_propagate(False)：列 minsize 已约束宽度，
+        # grid_propagate(False) 会导致 grid 管理器在窗口缩放时反复重算。
 
         workspace = ttk.Frame(self.root, style="App.TFrame")
         workspace.grid(row=0, column=1, sticky="nsew")
