@@ -148,6 +148,17 @@ class QoderWorkAdapter(BaseAdapter):
         except Exception:
             return False
 
+    @staticmethod
+    def _stringify_part_value(value) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value
+        try:
+            return json.dumps(value, ensure_ascii=False, indent=2)
+        except (TypeError, ValueError):
+            return str(value)
+
     def _parse_message(self, row, model_level: Optional[str]) -> Optional[Message]:
         role_str = (row["role"] or "").lower()
         role = {
@@ -175,47 +186,80 @@ class QoderWorkAdapter(BaseAdapter):
         for part in parts_data:
             if not isinstance(part, dict):
                 continue
-            ptype = part.get("type", "")
 
-            if ptype == "text":
-                text = part.get("text", "")
+            ptype = str(part.get("type", ""))
+            ptype_normalized = ptype.casefold().replace("_", "-")
+
+            if ptype_normalized in ("text", "input-text", "output-text"):
+                text = self._stringify_part_value(part.get("text", part.get("content", "")))
                 if text:
                     parts.append(MessagePart(type=MessagePartType.TEXT, content=text))
                     text_parts_list.append(text)
-            elif ptype == "tool-Thinking":
-                thinking = part.get("input", {}).get("text", "") if isinstance(part.get("input"), dict) else ""
+            elif ptype_normalized in ("tool-thinking", "thinking", "reasoning"):
+                raw_input = part.get("input", {})
+                if isinstance(raw_input, dict):
+                    thinking_value = raw_input.get("text", raw_input.get("content", ""))
+                else:
+                    thinking_value = raw_input
+                thinking = self._stringify_part_value(
+                    thinking_value or part.get("text", part.get("content", ""))
+                )
                 if thinking:
                     parts.append(MessagePart(type=MessagePartType.THINKING, content=thinking))
-            elif ptype.startswith("tool-") and "CallId" in part:
-                tool_name = part.get("toolName", ptype.replace("tool-", ""))
-                tool_input = json.dumps(part.get("input", {}), ensure_ascii=False, indent=2)
+            # Must be checked before the generic tool-* branch: result parts often
+            # also carry toolCallId and were previously misclassified as calls.
+            elif ptype_normalized in ("tool-result", "toolresult", "function-result"):
+                raw_output = part.get(
+                    "result",
+                    part.get("output", part.get("content", part.get("error", ""))),
+                )
+                tool_output = self._stringify_part_value(raw_output)
+                parts.append(MessagePart(
+                    type=MessagePartType.TOOL_RESULT,
+                    tool_name=part.get("toolName") or part.get("name"),
+                    tool_output=tool_output,
+                    content=tool_output,
+                ))
+            elif ptype_normalized.startswith("tool-") and (
+                "toolCallId" in part or "tool_call_id" in part or "callId" in part
+            ):
+                tool_name = part.get("toolName") or part.get("name") or ptype.replace("tool-", "")
+                tool_input = self._stringify_part_value(part.get("input", part.get("arguments", {})))
                 parts.append(MessagePart(
                     type=MessagePartType.TOOL_CALL,
                     tool_name=tool_name,
                     tool_input=tool_input,
                 ))
-            elif ptype == "tool-result":
-                tool_output = json.dumps(part.get("result", ""), ensure_ascii=False, indent=2)
-                parts.append(MessagePart(
-                    type=MessagePartType.TOOL_RESULT,
-                    tool_output=tool_output,
-                ))
-            elif ptype == "code":
-                code = part.get("text", "")
-                lang = part.get("language", "")
-                parts.append(MessagePart(
-                    type=MessagePartType.CODE,
-                    content=code,
-                    language=lang,
-                ))
+            elif ptype_normalized == "code":
+                code = self._stringify_part_value(part.get("text", part.get("content", "")))
+                lang = str(part.get("language", "") or "")
+                if code:
+                    parts.append(MessagePart(
+                        type=MessagePartType.CODE,
+                        content=code,
+                        language=lang,
+                    ))
+            else:
+                # Fail open for new QoderWork part types. Unknown parts often
+                # contain the final delivery in text/content/output fields; silently
+                # dropping them is worse than preserving them as readable text.
+                fallback = self._stringify_part_value(
+                    part.get("text", part.get("content", part.get("output", "")))
+                )
+                if fallback:
+                    parts.append(MessagePart(type=MessagePartType.TEXT, content=fallback))
+                    text_parts_list.append(fallback)
 
         text_content = "\n".join(text_parts_list) if text_parts_list else ""
 
         token_usage = None
+        metadata = {"raw_role": role_str}
         try:
             meta = json.loads(row["metadata"]) if row["metadata"] else {}
-            if "usage" in meta:
-                token_usage = meta["usage"]
+            if isinstance(meta, dict):
+                metadata.update(meta)
+                if "usage" in meta:
+                    token_usage = meta["usage"]
         except Exception:
             pass
 
@@ -227,4 +271,5 @@ class QoderWorkAdapter(BaseAdapter):
             parts=parts,
             model=model_level,
             token_usage=token_usage,
+            metadata=metadata,
         )
