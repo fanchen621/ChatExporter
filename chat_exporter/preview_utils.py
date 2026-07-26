@@ -44,6 +44,12 @@ _INTERNAL_TAG_LINE = re.compile(
     rf"^\s*</?(?:{'|'.join(re.escape(t) for t in _INTERNAL_BLOCK_TAGS)})(?:\s[^>]*)?>\s*$",
     re.IGNORECASE,
 )
+# 开标签必须整词匹配：<current_time> 是内部标签，<current_timezone> 不是。
+# 早期版本用 startswith 前缀判断，导致同名前缀的普通标签让整条消息被吞掉。
+_INTERNAL_OPEN_TAG = re.compile(
+    rf"^<({'|'.join(re.escape(t) for t in _INTERNAL_BLOCK_TAGS)})(?=[\s/>])",
+    re.IGNORECASE,
+)
 _USER_QUERY_TAG_LINE = re.compile(r"^\s*</?user_query(?:\s[^>]*)?>\s*$", re.IGNORECASE)
 _MULTI_BLANKS = re.compile(r"\n{3,}")
 _INTERNAL_LINE_PATTERNS = (
@@ -76,6 +82,34 @@ _THINKING_PLACEHOLDER_PATTERNS = (
 )
 
 
+# 代码块里的 <system-reminder> 之类是用户正在讨论的内容，不是运行时注入的上下文。
+# 清洗前先把围栏块挖出来占位，清洗后原样放回。占位符用私有区字符，_clean 不会动它。
+_FENCED_BLOCK = re.compile(r"(?m)^[ \t]*(`{3,}|~{3,})[^\n]*\n.*?(?:^[ \t]*\1[ \t]*$|\Z)", re.DOTALL)
+_FENCE_SLOT = "FENCE{}"
+_FENCE_SLOT_RE = re.compile(r"FENCE(\d+)")
+
+
+def _mask_fenced_blocks(text: str) -> Tuple[str, List[str]]:
+    blocks: List[str] = []
+
+    def take(match: "re.Match[str]") -> str:
+        blocks.append(match.group(0))
+        return _FENCE_SLOT.format(len(blocks) - 1)
+
+    return _FENCED_BLOCK.sub(take, text), blocks
+
+
+def _restore_fenced_blocks(text: str, blocks: List[str]) -> str:
+    if not blocks:
+        return text
+
+    def put(match: "re.Match[str]") -> str:
+        index = int(match.group(1))
+        return blocks[index] if 0 <= index < len(blocks) else ""
+
+    return _FENCE_SLOT_RE.sub(put, text)
+
+
 def _clean(text: str) -> str:
     value = (text or "").replace("\r\n", "\n").replace("\r", "\n")
     value = value.replace("\x00", "")
@@ -90,44 +124,63 @@ def strip_internal_context(text: str, source_app: str = "") -> str:
     if not value:
         return ""
 
+    value, fenced_blocks = _mask_fenced_blocks(value)
+
     queries = [_clean(match) for match in _USER_QUERY_PATTERN.findall(value)]
     queries = [item for item in queries if item]
 
+    injected_block_removed = False
     for pattern in _INTERNAL_BLOCK_PATTERNS:
-        value = pattern.sub("\n", value)
+        value, hits = pattern.subn("\n", value)
+        injected_block_removed = injected_block_removed or bool(hits)
     value = re.sub(r"</?user_query(?:\s[^>]*)?>", "\n", value, flags=re.I)
 
+    lines = value.splitlines()
+    # 行级环境噪声（OS Version:/Shell:/Path: …）只在这条消息确实带了注入上下文时才清理。
+    # 否则用户自己敲的 "Shell: 我该用哪个？" 会被整行删掉。
+    has_injected_context = injected_block_removed or any(
+        _INTERNAL_TAG_LINE.match(line.strip()) or _INTERNAL_OPEN_TAG.match(line.strip())
+        for line in lines
+    )
+
     kept: List[str] = []
-    skip_until: Optional[str] = None
-    for line in value.splitlines():
+    index = 0
+    while index < len(lines):
+        line = lines[index]
         stripped = line.strip()
-        lower = stripped.casefold()
 
-        if skip_until:
-            if lower.startswith(f"</{skip_until}"):
-                skip_until = None
-            continue
-
-        opened_internal = None
-        for tag in _INTERNAL_BLOCK_TAGS:
-            if lower.startswith(f"<{tag}") and not lower.startswith(f"</{tag}"):
-                opened_internal = tag
-                break
-        if opened_internal:
-            skip_until = opened_internal
-            continue
+        opened = _INTERNAL_OPEN_TAG.match(stripped)
+        if opened:
+            tag = opened.group(1).casefold()
+            # 只有找得到配对的闭合行才跳过整块。找不到就说明这是残缺/伪造的标签，
+            # 此时吞掉剩余全部内容会静默删除真实正文（v1.1.3 及之前的行为）。
+            close = None
+            for probe in range(index + 1, len(lines)):
+                if lines[probe].strip().casefold().startswith(f"</{tag}"):
+                    close = probe
+                    break
+            if close is not None:
+                index = close + 1
+                continue
 
         if _INTERNAL_TAG_LINE.match(stripped):
+            index += 1
             continue
         if _USER_QUERY_TAG_LINE.match(stripped):
+            index += 1
             continue
-        if any(pattern.search(stripped) for pattern in _INTERNAL_LINE_PATTERNS):
+        if has_injected_context and any(
+            pattern.search(stripped) for pattern in _INTERNAL_LINE_PATTERNS
+        ):
+            index += 1
             continue
         if source_app.casefold().startswith("trae") and any(
             pattern.match(stripped) for pattern in _TRAE_UI_LINE_PATTERNS
         ):
+            index += 1
             continue
         kept.append(line)
+        index += 1
 
     cleaned = _clean("\n".join(kept))
     if queries:
@@ -137,11 +190,13 @@ def strip_internal_context(text: str, source_app: str = "") -> str:
 
     if source_app.casefold().startswith("workbuddy"):
         lines = cleaned.splitlines()
+        # 注意：真正的代码块此时已被占位符替换，这里 pop 掉的只会是注入块残留的
+        # 孤立分隔符，不会再吃掉 AI 回答结尾那条闭合围栏。
         while lines and lines[-1].strip() in {"---", "```", "Injected workspace identity files:"}:
             lines.pop()
         cleaned = _clean("\n".join(lines))
 
-    return cleaned
+    return _restore_fenced_blocks(cleaned, fenced_blocks)
 
 
 def role_from_hint(raw_role: str) -> Optional[Role]:

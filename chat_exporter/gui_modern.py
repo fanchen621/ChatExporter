@@ -615,13 +615,22 @@ class ChatExporterGUI:
         adapter = self.current_adapter
         if not adapter:
             return
+        # 全局串行化 list_conversations：适配器实例不是线程安全的（快照临时目录、
+        # _cached_conversations 都是共享状态）。自动回位 + 用户点击可以在 4 秒的
+        # TRAE 加载里重叠，两个并发 list 会互相踩出残缺列表，谁后到谁上屏。
+        lock = getattr(self, "_source_load_lock", None)
+        if lock is None:
+            lock = self._source_load_lock = threading.Lock()
 
         def worker():
-            try:
-                conversations = adapter.list_conversations()
-                self._post_ui(self._on_conversations_loaded, conversations, generation)
-            except Exception as exc:
-                self._post_ui(self._on_conversations_failed, str(exc), generation)
+            with lock:
+                if generation != self._load_generation:
+                    return  # 排队期间已被更新的加载取代，别再白读一遍
+                try:
+                    conversations = adapter.list_conversations()
+                    self._post_ui(self._on_conversations_loaded, conversations, generation)
+                except Exception as exc:
+                    self._post_ui(self._on_conversations_failed, str(exc), generation)
 
         threading.Thread(target=worker, daemon=True, name=f"load-{adapter.name}").start()
 

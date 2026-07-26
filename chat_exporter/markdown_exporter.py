@@ -8,11 +8,29 @@ from .preview_utils import effective_role, strip_internal_context
 
 
 class MarkdownExporter:
-    def __init__(self, include_metadata: bool = True, include_timestamp: bool = True, include_thinking: bool = True):
+    def __init__(
+        self,
+        include_metadata: bool = True,
+        include_timestamp: bool = True,
+        include_thinking: bool = True,
+        include_tool_messages: bool = True,
+    ):
         self.include_metadata = include_metadata
         self.include_timestamp = include_timestamp
         # 用户反馈：默认保留思考过程，GUI 不再提供关闭开关。
         self.include_thinking = include_thinking
+        # 有些客户端（QClaw）把工具输出存成独立的 role=tool 消息而不是 assistant 的
+        # tool_result part。预览按设计过滤掉它们，但"完整导出"必须保留：实测一条
+        # QClaw 对话 97% 的字节都在这类消息里。
+        self.include_tool_messages = include_tool_messages
+
+    @staticmethod
+    def _fence(content: str, char: str = "`", minimum: int = 3) -> str:
+        """选一条比内容里最长同字符栅栏更长的围栏，避免正文提前闭合。"""
+        longest = 0
+        for run in re.findall(rf"{re.escape(char)}{{{minimum},}}", str(content or "")):
+            longest = max(longest, len(run))
+        return char * max(minimum, longest + 1)
 
     def export(self, conv: Conversation, output_path: Optional[str] = None) -> str:
         md_content = self._build_markdown(conv)
@@ -30,9 +48,19 @@ class MarkdownExporter:
         # Build the final chapter list first. Metadata must describe what was
         # actually exported, not every low-level database record.
         visible = []
+        tool_sections = 0
         for msg in conv.messages:
             eff_role = effective_role(msg)
             if eff_role is None:
+                # effective_role 是"预览可见性"规则，不该决定完整导出的内容。
+                # QClaw 把工具输出存成独立的 role=tool 消息（TEXT part），此前整批被丢弃。
+                if not (self.include_tool_messages and msg.role == Role.TOOL):
+                    continue
+                content = self._format_message(msg, source_app=conv.source_app)
+                if not content.strip():
+                    continue
+                tool_sections += 1
+                visible.append((msg, Role.TOOL, content))
                 continue
             content = self._format_message(msg, source_app=conv.source_app)
             if not content.strip():
@@ -55,6 +83,8 @@ class MarkdownExporter:
             asst_count = sum(1 for _msg, role, _content in visible if role == Role.ASSISTANT)
             meta_lines.append(f"- **消息数量**: {len(visible)}")
             meta_lines.append(f"- **对话轮次**: {user_count} 问 / {asst_count} 答")
+            if tool_sections:
+                meta_lines.append(f"- **工具记录**: {tool_sections} 条（默认折叠）")
 
         total_tokens = 0
         for m in conv.messages:
@@ -78,7 +108,14 @@ class MarkdownExporter:
 
             lines.append(header)
             lines.append("")
-            lines.append(content)
+            if eff_role == Role.TOOL:
+                # 工具记录默认折叠，完整保留但不打断阅读节奏。
+                fence = self._fence(content, "~")
+                lines.append(
+                    f"<details>\n<summary>🔧 工具记录</summary>\n\n{fence}\n{content}\n{fence}\n\n</details>"
+                )
+            else:
+                lines.append(content)
             lines.append("")
 
             if i < len(visible) - 1:
@@ -132,82 +169,76 @@ class MarkdownExporter:
         parts_text = []
         main_text = msg.content
 
-        has_explicit_parts = bool(msg.parts)
-
-        if not has_explicit_parts:
+        if not msg.parts:
             cleaned = strip_internal_context(main_text or "", source_app=source_app)
             return cleaned if cleaned else self._clean_content(main_text)
 
-        text_parts = []
-        thinking_parts = []
-        tool_calls = []
-        tool_results = []
-        code_parts = []
-        file_parts = []
-        image_parts = []
+        thinking_parts = [p.content for p in msg.parts if p.type == MessagePartType.THINKING and p.content]
+        tool_results = [p for p in msg.parts if p.type == MessagePartType.TOOL_RESULT]
+        has_body = False
 
-        for part in msg.parts:
-            if part.type == MessagePartType.THINKING and part.content:
-                thinking_parts.append(part.content)
-            elif part.type == MessagePartType.TOOL_CALL:
-                tool_calls.append(part)
-            elif part.type == MessagePartType.TOOL_RESULT:
-                tool_results.append(part)
+        # 按 parts 原始顺序渲染：讲解和它对应的代码块必须保持相邻。
+        # 旧实现先输出全部 TEXT 再输出全部 CODE，读者会把代码认到错误的步骤上。
+        index = 0
+        while index < len(msg.parts):
+            part = msg.parts[index]
+
+            if part.type == MessagePartType.TEXT and part.content:
+                cleaned = strip_internal_context(part.content, source_app=source_app)
+                body = cleaned if cleaned else self._clean_content(part.content)
+                if body:
+                    parts_text.append(body)
+                    has_body = True
+
             elif part.type == MessagePartType.CODE:
-                code_parts.append(part)
-            elif part.type == MessagePartType.FILE:
-                file_parts.append(part)
-            elif part.type == MessagePartType.IMAGE:
-                image_parts.append(part)
-            elif part.type == MessagePartType.TEXT and part.content:
-                text_parts.append(part.content)
+                lang = part.language or ""
+                fence = self._fence(part.content, "`")
+                parts_text.append(f"\n{fence}{lang}\n{part.content}\n{fence}\n")
+                has_body = True
 
-        if text_parts:
-            combined = "\n".join(text_parts)
-            cleaned = strip_internal_context(combined, source_app=source_app)
-            if cleaned:
-                parts_text.append(cleaned)
-            else:
-                parts_text.append(self._clean_content(combined))
-        else:
+            elif part.type == MessagePartType.THINKING:
+                # 合并相邻思考块为一个 <details>，避免几十个折叠块堆叠。
+                run = []
+                while index < len(msg.parts) and msg.parts[index].type == MessagePartType.THINKING:
+                    if msg.parts[index].content and msg.parts[index].content.strip():
+                        run.append(msg.parts[index].content.strip())
+                    index += 1
+                index -= 1
+                if self.include_thinking and run:
+                    combined = "\n\n---\n\n".join(run)
+                    fence = self._fence(combined, "~")
+                    parts_text.append(
+                        f"\n<details>\n<summary>💭 思考过程</summary>\n\n{fence}\n{combined}\n{fence}\n\n</details>\n"
+                    )
+
+            elif part.type == MessagePartType.TOOL_CALL:
+                name = part.tool_name or "unknown tool"
+                inp = part.tool_input or part.content or ""
+                fence = self._fence(inp, "`")
+                parts_text.append(
+                    f"\n> 🔧 **调用工具**: `{name}`\n>\n> {fence}json\n> {self._indent(inp, '> ')}\n> {fence}\n"
+                )
+
+            elif part.type == MessagePartType.TOOL_RESULT:
+                output = str(part.tool_output or part.content or "")
+                fence = self._fence(output, "~")
+                parts_text.append(
+                    f"\n<details>\n<summary>📎 工具返回结果</summary>\n\n{fence}\n{output}\n{fence}\n\n</details>\n"
+                )
+
+            elif part.type == MessagePartType.FILE:
+                parts_text.append(f"\n📄 **附件**: `{part.file_name or 'file'}`\n")
+
+            elif part.type == MessagePartType.IMAGE:
+                parts_text.append(f"\n🖼️ **图片**: `{part.file_name or 'image.png'}`\n")
+
+            index += 1
+
+        # 最终交付只存在于 thinking/tool_result 时，仍需补一段可见正文。
+        if not has_body:
             fallback = self._fallback_body(thinking_parts, tool_results, source_app)
             if fallback:
-                parts_text.append(fallback)
-
-        if code_parts:
-            for cp in code_parts:
-                lang = cp.language or ""
-                parts_text.append(f"\n```{lang}\n{cp.content}\n```\n")
-
-        if self.include_thinking and thinking_parts:
-            # 合并连续思考块为一个 <details>，避免几十个折叠块堆叠。
-            # 使用 ~~~ 围栏避免与思考内容内部的 ``` 冲突。
-            combined_thinking = "\n\n---\n\n".join(
-                t.strip() for t in thinking_parts if t and t.strip()
-            )
-            if combined_thinking:
-                parts_text.append(f"\n<details>\n<summary>💭 思考过程</summary>\n\n~~~\n{combined_thinking}\n~~~\n\n</details>\n")
-
-        if tool_calls:
-            for tc in tool_calls:
-                name = tc.tool_name or "unknown tool"
-                inp = tc.tool_input or tc.content or ""
-                parts_text.append(f"\n> 🔧 **调用工具**: `{name}`\n>\n> ```json\n> {self._indent(inp, '> ')}\n> ```\n")
-
-        if tool_results:
-            for tr in tool_results:
-                output = str(tr.tool_output or tr.content or "")
-                parts_text.append(f"\n<details>\n<summary>📎 工具返回结果</summary>\n\n~~~\n{output}\n~~~\n\n</details>\n")
-
-        if file_parts:
-            for fp in file_parts:
-                name = fp.file_name or "file"
-                parts_text.append(f"\n📄 **附件**: `{name}`\n")
-
-        if image_parts:
-            for ip in image_parts:
-                name = ip.file_name or "image.png"
-                parts_text.append(f"\n🖼️ **图片**: `{name}`\n")
+                parts_text.insert(0, fallback)
 
         result = "\n".join(parts_text).strip()
         if not result:

@@ -11,6 +11,9 @@ cmd = [
     "--windowed",
     "--clean",
     "--noconfirm",
+    "--icon=assets/app.ico",
+    "--add-data=assets/app.ico;assets",
+    "--add-data=assets/window.png;assets",
     # cryptography (TRAE SQLCipher 解密需要) — 显式声明避免被裁剪
     "--hidden-import=cryptography",
     "--hidden-import=cryptography.hazmat.primitives.ciphers",

@@ -43,6 +43,111 @@ class Palette:
     SELECTION = "#EEF0FF"
 
 
+LIGHT_THEME = {name: value for name, value in vars(Palette).items() if not name.startswith("_")}
+
+DARK_THEME = {
+    "WINDOW": "#0B1120",
+    "SIDEBAR": "#070B14",
+    "SIDEBAR_RAISED": "#151E31",
+    "SIDEBAR_HOVER": "#1D283D",
+    "SURFACE": "#111A2B",
+    "SURFACE_ALT": "#18233A",
+    "BORDER": "#26334D",
+    "BORDER_STRONG": "#35435F",
+    "TEXT": "#E9EEF8",
+    "TEXT_SECONDARY": "#C2CCDE",
+    "TEXT_MUTED": "#94A3B8",
+    "TEXT_DISABLED": "#64748B",
+    "TEXT_ON_DARK": "#F8FAFC",
+    "TEXT_ON_DARK_MUTED": "#94A3B8",
+    "ACCENT": "#8B85FF",
+    "ACCENT_HOVER": "#9D98FF",
+    "ACCENT_PRESSED": "#B4B0FF",
+    "ACCENT_SOFT": "#232048",
+    "ACCENT_SOFT_HOVER": "#2C2857",
+    "SUCCESS": "#3DD68C",
+    "SUCCESS_SOFT": "#11291F",
+    "WARNING": "#FDB022",
+    "WARNING_SOFT": "#2A1F0B",
+    "DANGER": "#FF7A70",
+    "DANGER_SOFT": "#2E1512",
+    "INFO": "#63A9FF",
+    "INFO_SOFT": "#0F2138",
+    "CODE_BG": "#18233A",
+    "SELECTION": "#232048",
+}
+
+THEMES = {"light": LIGHT_THEME, "dark": DARK_THEME}
+
+
+def apply_theme(name: str) -> str:
+    """把主题色写回 Palette。
+
+    全部界面代码都在构建控件时直接读 Palette.XXX，所以换肤 = 改这些类属性，
+    再重建样式并把已存在控件的旧色值映射成新色值（见 retheme_widgets）。
+    """
+    theme = THEMES.get(name) or LIGHT_THEME
+    for key, value in theme.items():
+        setattr(Palette, key, value)
+    return name if name in THEMES else "light"
+
+
+_FG_KEYS = ("TEXT", "TEXT_SECONDARY", "TEXT_MUTED", "TEXT_DISABLED", "TEXT_ON_DARK", "TEXT_ON_DARK_MUTED")
+
+
+def theme_color_map(source: str, target: str) -> dict:
+    """旧主题色 -> 新主题色查找表，前景/背景分开。
+
+    同一个色值可能同时是浅色主题的某个背景和某个前景（例：#F8FAFC 既是
+    SURFACE_ALT 又是 TEXT_ON_DARK），一张表按值映射必然选错其中一边——
+    v2.0 初版就把深色模式下的侧栏文字染成了背景色。
+    """
+    old = THEMES.get(source) or LIGHT_THEME
+    new = THEMES.get(target) or LIGHT_THEME
+    fg_map: dict = {}
+    bg_map: dict = {}
+    for key, value in old.items():
+        replacement = new.get(key)
+        if not replacement or value == replacement:
+            continue
+        bucket = fg_map if key in _FG_KEYS else bg_map
+        bucket[value.casefold()] = replacement
+    return {"fg": fg_map, "bg": bg_map}
+
+
+_FG_OPTIONS = ("foreground", "fg", "activeforeground", "disabledforeground", "insertbackground", "selectforeground")
+_BG_OPTIONS = (
+    "background", "bg", "activebackground", "highlightbackground", "highlightcolor",
+    "selectbackground", "troughcolor",
+)
+
+
+def retheme_widgets(widget: tk.Misc, mapping: dict) -> None:
+    """递归把控件上出现的旧主题色替换成新主题色。
+
+    tk 经典控件的颜色是构建时写死的，ttk 样式重配不会影响它们；
+    没有这一步，换肤后侧栏和预览区会停在上一个主题。
+    前景选项只查前景表，背景选项优先背景表，互不串染。
+    """
+    fg_map = mapping.get("fg", {})
+    bg_map = mapping.get("bg", {})
+    if not fg_map and not bg_map:
+        return
+    for option in _FG_OPTIONS + _BG_OPTIONS:
+        try:
+            current = str(widget.cget(option)).casefold()
+        except Exception:
+            continue
+        replacement = fg_map.get(current) if option in _FG_OPTIONS else bg_map.get(current)
+        if replacement:
+            try:
+                widget.configure(**{option: replacement})
+            except Exception:
+                pass
+    for child in widget.winfo_children():
+        retheme_widgets(child, mapping)
+
+
 class Metrics:
     SIDEBAR_WIDTH = 238
     HEADER_HEIGHT = 76
@@ -55,6 +160,28 @@ class Metrics:
 FONT_UI = "Microsoft YaHei UI"
 FONT_LATIN = "Segoe UI"
 FONT_MONO = "Cascadia Mono"
+
+
+def resource_path(*relative: str) -> str:
+    """资源定位：源码运行取仓库根目录，PyInstaller onefile 取 _MEIPASS 解包目录。"""
+    import sys
+
+    base = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, *relative)
+
+
+def apply_app_icon(root: tk.Tk) -> None:
+    """给主窗口装应用图标；资产缺失时静默跳过（图标绝不值得让程序起不来）。"""
+    try:
+        ico = resource_path("assets", "app.ico")
+        if os.path.exists(ico):
+            root.iconbitmap(default=ico)
+            return
+        png = resource_path("assets", "window.png")
+        if os.path.exists(png):
+            root.iconphoto(True, tk.PhotoImage(file=png))
+    except Exception:
+        pass
 
 
 def enable_windows_dpi_awareness() -> None:
@@ -278,6 +405,36 @@ def configure_styles(root: tk.Tk) -> ttk.Style:
         thickness=5,
     )
     style.configure("Modern.TPanedwindow", background=Palette.WINDOW, sashwidth=8)
+    style.configure("Sash", sashthickness=8, gripcount=0)
+
+    # Combobox 是 ttk 里少数不吃 style.configure 背景的控件，必须逐项 map，
+    # 否则深色主题下会留下一块刺眼的白底黑字下拉框。
+    style.configure(
+        "TCombobox",
+        fieldbackground=Palette.SURFACE_ALT,
+        background=Palette.SURFACE_ALT,
+        foreground=Palette.TEXT,
+        arrowcolor=Palette.TEXT_MUTED,
+        bordercolor=Palette.BORDER,
+        lightcolor=Palette.BORDER,
+        darkcolor=Palette.BORDER,
+        selectbackground=Palette.SURFACE_ALT,
+        selectforeground=Palette.TEXT,
+        padding=(8, 5),
+    )
+    style.map(
+        "TCombobox",
+        fieldbackground=[("readonly", Palette.SURFACE_ALT), ("disabled", Palette.SURFACE)],
+        foreground=[("readonly", Palette.TEXT), ("disabled", Palette.TEXT_DISABLED)],
+        background=[("readonly", Palette.SURFACE_ALT), ("active", Palette.SURFACE_ALT)],
+        arrowcolor=[("active", Palette.ACCENT)],
+        bordercolor=[("focus", Palette.ACCENT)],
+    )
+    # 下拉弹出列表是 Tk 原生 Listbox，只能通过 option database 上色。
+    root.option_add("*TCombobox*Listbox.background", Palette.SURFACE)
+    root.option_add("*TCombobox*Listbox.foreground", Palette.TEXT)
+    root.option_add("*TCombobox*Listbox.selectBackground", Palette.ACCENT_SOFT)
+    root.option_add("*TCombobox*Listbox.selectForeground", Palette.ACCENT_PRESSED)
     style.configure(
         "Modern.TCheckbutton",
         background=Palette.SURFACE,

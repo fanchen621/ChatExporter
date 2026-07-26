@@ -1,10 +1,27 @@
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from .workbuddy import WorkBuddyAdapter as BaseWorkBuddyAdapter
 from ..models import Message, MessagePart, MessagePartType, Role
 from ..preview_utils import strip_internal_context
+
+_BALANCED_TAG_BLOCK = re.compile(r"<([A-Za-z_][\w.:-]*)(?:\s[^>]*)?>.*?</\1\s*>", re.DOTALL)
+
+
+def _is_pure_injected_block(text: str) -> bool:
+    """整条正文是否只由成对标签块组成（<system-reminder>…</system-reminder>）。
+
+    这种记录本来就不是用户说的话，清空后丢弃是对的；但只要标签块之外还有
+    一句真实正文，清洗把它清成空就属于误伤，必须回退原文。
+    """
+    residue = text
+    for _ in range(5):
+        residue, hits = _BALANCED_TAG_BLOCK.subn(" ", residue)
+        if not hits:
+            break
+    return not residue.strip()
 
 
 class WorkBuddyAdapter(BaseWorkBuddyAdapter):
@@ -60,11 +77,19 @@ class WorkBuddyAdapter(BaseWorkBuddyAdapter):
         message.content = cleaned_content
         message.parts = cleaned_parts
 
-        # 纯内部注入记录不再伪装成用户消息。
         if not message.content and not any(
             part.type in (MessagePartType.CODE, MessagePartType.FILE, MessagePartType.IMAGE)
             for part in message.parts
         ):
+            # 只有"整条正文都是成对注入块"才允许丢弃。清洗把非纯注入的原文清成
+            # 空属于误伤（下游导出/预览本来都是 fail-open 的），必须回退原文。
+            if original_content.strip() and not _is_pure_injected_block(original_content):
+                message.content = original_content.strip()
+                message.parts = [
+                    MessagePart(type=MessagePartType.TEXT, content=message.content)
+                ]
+                message.metadata["internal_context_removed"] = False
+                return message
             return None
 
         return message
