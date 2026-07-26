@@ -20,6 +20,7 @@ from .ui_theme import (
     apply_theme,
     configure_styles,
     place_centered,
+    retheme_combobox_popdowns,
     retheme_widgets,
     theme_color_map,
 )
@@ -699,9 +700,11 @@ class ChatExporterGUI(BaseChineseGUI):
         configure_styles(self.root)
         self._configure_wide_scrollbar_style()
         retheme_widgets(self.root, mapping)
+        retheme_combobox_popdowns(self.root)
         for dialog in (self._key_dialog,):
             if dialog and dialog.winfo_exists():
                 retheme_widgets(dialog, mapping)
+                retheme_combobox_popdowns(dialog)
 
         # Text/Treeview 的 tag 颜色不是控件选项，换肤后要重新配置。
         self._setup_text_tags()

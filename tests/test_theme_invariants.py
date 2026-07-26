@@ -136,6 +136,65 @@ def test_scrollbar_is_visible_against_its_trough(theme_name, theme):
     assert ratio >= 1.4, f"{theme_name} 滑块/轨道对比只有 {ratio:.2f}"
 
 
+def test_dual_role_tokens_land_in_both_maps():
+    """既当填充又当文字的 token（状态点 bg + 状态文字 fg）两张表都要有。
+
+    只进 bg 表的话，用 fg=Palette.SUCCESS 画的"可用"标签换肤后会停在旧色。
+    """
+    from chat_exporter.ui_theme import _DUAL_KEYS, theme_color_map
+
+    for source, target in (("light", "dark"), ("dark", "light")):
+        src = LIGHT_THEME if source == "light" else DARK_THEME
+        dst = DARK_THEME if target == "dark" else LIGHT_THEME
+        mapping = theme_color_map(source, target)
+        for key in _DUAL_KEYS:
+            if src[key] == dst[key]:
+                continue  # 两个主题同值时本来就不需要映射
+            folded = src[key].casefold()
+            assert mapping["fg"].get(folded) == dst[key], f"{source}->{target}: {key} 不在前景表"
+            assert mapping["bg"].get(folded) == dst[key], f"{source}->{target}: {key} 不在背景表"
+
+
+@pytest.mark.parametrize("source,target", [("light", "dark"), ("dark", "light")])
+def test_dual_keys_do_not_collide_with_single_role_tokens(source, target):
+    """双重身份 token 登进前景表时，不能顶掉某个纯前景 token 的映射。"""
+    from chat_exporter.ui_theme import _DUAL_KEYS
+
+    src = LIGHT_THEME if source == "light" else DARK_THEME
+    dst = DARK_THEME if target == "dark" else LIGHT_THEME
+    fg_only = {src[k].casefold(): k for k in _FG_KEYS}
+    for key in _DUAL_KEYS:
+        folded = src[key].casefold()
+        clash = fg_only.get(folded)
+        if clash and dst[clash] != dst[key]:
+            pytest.fail(f"{source}->{target}: {key} 与前景 token {clash} 同值 {folded} 且去向不同")
+
+
+def test_selectcolor_is_remapped():
+    """勾选框中间那个小方块也要换肤，否则深色模式下是一块白斑。"""
+    from chat_exporter.ui_theme import _BG_OPTIONS
+
+    assert "selectcolor" in _BG_OPTIONS
+
+
+def test_source_accents_never_collide_with_theme_colors():
+    """侧栏的来源身份色不参与换肤，所以不能和任何主题 token 同值。
+
+    retheme_widgets 按色值查表——撞上就会被当作主题色一起染掉，
+    表现为切换主题后某一个来源的色条莫名其妙变色。
+    """
+    from chat_exporter.gui_modern import ChatExporterGUI
+
+    theme_values = {v.casefold() for v in LIGHT_THEME.values()}
+    theme_values |= {v.casefold() for v in DARK_THEME.values()}
+    collisions = {
+        name: color
+        for name, color in ChatExporterGUI.APP_ACCENTS.items()
+        if color.casefold() in theme_values
+    }
+    assert not collisions, f"来源色与主题色撞值：{collisions}"
+
+
 def test_apply_theme_round_trip_restores_every_value():
     """浅 -> 深 -> 浅 必须逐 token 回到原值。"""
     from chat_exporter.ui_theme import Palette, apply_theme

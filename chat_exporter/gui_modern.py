@@ -39,7 +39,10 @@ class ChatExporterGUI:
     # 来源徽标色：始终画在深色侧栏上，两个主题共用一套。
     # 全部压低饱和度、锚在暖区，跟 Claude 珊瑚同族而不互相打架。
     APP_ACCENTS = {
-        "trae": "#D97757",       # 珊瑚
+        # 这些是"来源身份色"，不参与换肤，所以刻意不与 Palette 里任何 token 同值：
+        # retheme_widgets 按色值查表，撞上就会被当成主题色一起染掉。
+        # （#D97757 正好是深色主题的 ACCENT，撞过一次。）
+        "trae": "#D8724F",       # 珊瑚
         "qoderwork": "#E0A96D",  # 琥珀
         "workbuddy": "#A8B37E",  # 鼠尾草
         "qclaw": "#8FB3C7",      # 雾蓝

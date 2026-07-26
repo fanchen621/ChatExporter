@@ -109,6 +109,7 @@ _HTML_STYLE = """
   --ai-accent: #c96442;
   --tool-bg: #faf9f5;
   --code-bg: #f5f3ed;
+  --code-line: #ddd9cc;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -122,7 +123,10 @@ _HTML_STYLE = """
     --ai-bg: #262624;
     --ai-accent: #e08a6b;
     --tool-bg: #30302e;
-    --code-bg: #30302e;
+    /* 必须比 --card / --user-bg / --tool-bg 都深一档：三者同色时，
+       嵌在用户气泡或工具块里的代码块等于没有容器。 */
+    --code-bg: #1e1e1c;
+    --code-line: #4a4945;
   }
 }
 * { box-sizing: border-box; }
@@ -173,7 +177,7 @@ body {
 .para:last-child { margin-bottom: 0; }
 pre {
   background: var(--code-bg);
-  border: 1px solid var(--line);
+  border: 1px solid var(--code-line);
   border-radius: 8px;
   padding: 12px 14px;
   overflow-x: auto;

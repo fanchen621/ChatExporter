@@ -140,12 +140,24 @@ _FG_KEYS = (
 )
 
 
+# 双重身份的 token：既当填充色又当文字色。
+# 例：SUCCESS 在侧栏是状态圆点的 bg（gui_cn_v2.py:1181），在"可用"标签上是 fg
+# （gui_cn_v2.py:1177）。只登记进 bg 表的话，那些文字换肤后会停在旧色。
+_DUAL_KEYS = (
+    "ACCENT", "ACCENT_HOVER", "ACCENT_PRESSED",
+    "SUCCESS", "WARNING", "DANGER", "INFO",
+)
+
+
 def theme_color_map(source: str, target: str) -> dict:
     """旧主题色 -> 新主题色查找表，前景/背景分开。
 
     同一个色值可能同时是浅色主题的某个背景和某个前景（例：#F8FAFC 既是
     SURFACE_ALT 又是 TEXT_ON_DARK），一张表按值映射必然选错其中一边——
     v2.0 初版就把深色模式下的侧栏文字染成了背景色。
+
+    _DUAL_KEYS 里的 token 两张表都登记：它们两种身份都真实存在，
+    而且色值不与任何单一身份的 token 冲突（见 test_theme_invariants）。
     """
     old = THEMES.get(source) or LIGHT_THEME
     new = THEMES.get(target) or LIGHT_THEME
@@ -155,8 +167,14 @@ def theme_color_map(source: str, target: str) -> dict:
         replacement = new.get(key)
         if not replacement or value == replacement:
             continue
-        bucket = fg_map if key in _FG_KEYS else bg_map
-        bucket[value.casefold()] = replacement
+        folded = value.casefold()
+        if key in _FG_KEYS:
+            fg_map[folded] = replacement
+        elif key in _DUAL_KEYS:
+            fg_map[folded] = replacement
+            bg_map[folded] = replacement
+        else:
+            bg_map[folded] = replacement
     return {"fg": fg_map, "bg": bg_map}
 
 
@@ -164,6 +182,8 @@ _FG_OPTIONS = ("foreground", "fg", "activeforeground", "disabledforeground", "in
 _BG_OPTIONS = (
     "background", "bg", "activebackground", "highlightbackground", "highlightcolor",
     "selectbackground", "troughcolor",
+    # 勾选框中间那个小方块。漏了它，深色模式下"只看对话"的方块会一直是白的。
+    "selectcolor",
 )
 
 
@@ -178,19 +198,64 @@ def retheme_widgets(widget: tk.Misc, mapping: dict) -> None:
     bg_map = mapping.get("bg", {})
     if not fg_map and not bg_map:
         return
-    for option in _FG_OPTIONS + _BG_OPTIONS:
+
+    # 先整体快照、再统一写回。tk 里 -bg 就是 -background 的别名（-fg 同理），
+    # 边读边写会把刚写进去的新颜色当成"旧颜色"再映射一次：
+    # 卡片 #FFFFFF 先正确变成深色 SURFACE #262624，紧接着 #262624 又被当成
+    # 浅色 SIDEBAR 命中，最终落到 #141312——每张白卡片都会染成侧栏色。
+    updates: dict = {}
+    for option in _FG_OPTIONS:
         try:
             current = str(widget.cget(option)).casefold()
         except Exception:
             continue
-        replacement = fg_map.get(current) if option in _FG_OPTIONS else bg_map.get(current)
+        replacement = fg_map.get(current)
         if replacement:
-            try:
-                widget.configure(**{option: replacement})
-            except Exception:
-                pass
+            updates[option] = replacement
+    for option in _BG_OPTIONS:
+        try:
+            current = str(widget.cget(option)).casefold()
+        except Exception:
+            continue
+        replacement = bg_map.get(current)
+        if replacement:
+            updates[option] = replacement
+
+    for option, value in updates.items():
+        try:
+            widget.configure(**{option: value})
+        except Exception:
+            pass
     for child in widget.winfo_children():
         retheme_widgets(child, mapping)
+
+
+def retheme_combobox_popdowns(widget: tk.Misc) -> None:
+    """把 ttk 下拉框的弹出列表也刷成当前主题。
+
+    弹出列表是 Tcl 层建的，没有 Python 包装对象；Tkinter 的 winfo_children()
+    会静默跳过这类子控件（拿不到就 pass），所以 retheme_widgets 永远走不到它——
+    下拉过一次之后，那个列表就永久停在打开它时的主题。
+    """
+    stack = [widget]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, ttk.Combobox):
+            try:
+                popdown = node.tk.call("ttk::combobox::PopdownWindow", node)
+                node.tk.call(
+                    f"{popdown}.f.l", "configure",
+                    "-background", Palette.SURFACE,
+                    "-foreground", Palette.TEXT,
+                    "-selectbackground", Palette.ACCENT_SOFT,
+                    "-selectforeground", Palette.ACCENT_PRESSED,
+                )
+            except Exception:
+                pass
+        try:
+            stack.extend(node.winfo_children())
+        except Exception:
+            pass
 
 
 class Metrics:
