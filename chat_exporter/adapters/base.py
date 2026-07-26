@@ -93,6 +93,38 @@ class BaseAdapter(ABC):
         return conn
 
     @staticmethod
+    def _normalize_token_usage(value):
+        """把来源里的 usage 字段规整成 Dict[str, int]。
+
+        markdown_exporter 直接调用 m.token_usage.get(...)，来源一旦给出非 dict
+        （字符串 / 数字 / 列表），整批导出会在这里抛异常中断——一条脏数据毁掉
+        整轮导出，所以形状必须在适配器层收口。
+        """
+        if value is None or isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            return {"total_tokens": int(value)}
+        if isinstance(value, str):
+            try:
+                return {"total_tokens": int(float(value.strip()))}
+            except (TypeError, ValueError):
+                return None
+        if isinstance(value, dict):
+            normalized = {}
+            for key, raw in value.items():
+                if raw is None or isinstance(raw, bool):
+                    continue
+                if isinstance(raw, (int, float)):
+                    normalized[str(key)] = int(raw)
+                elif isinstance(raw, str):
+                    try:
+                        normalized[str(key)] = int(float(raw.strip()))
+                    except (TypeError, ValueError):
+                        continue
+            return normalized or None
+        return None
+
+    @staticmethod
     def _ts_to_dt(ts, ms: bool = True):
         from datetime import datetime
         if ts is None:

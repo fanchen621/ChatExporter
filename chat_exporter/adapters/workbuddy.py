@@ -7,6 +7,7 @@ from typing import List, Optional
 
 from .base import BaseAdapter
 from ..models import AppInfo, Conversation, Message, MessagePart, MessagePartType, Role
+from ..preview_utils import role_from_hint
 
 
 class WorkBuddyAdapter(BaseAdapter):
@@ -456,7 +457,9 @@ class WorkBuddyAdapter(BaseAdapter):
         try:
             role = Role(role_str) if role_str else Role.USER
         except ValueError:
-            role = Role.USER
+            # 陌生角色名先问 role_from_hint（assistant_message / agent-output …）。
+            # 无脑兜底成 USER 会把 AI 回复标成用户提问，导出里问答对整段错位。
+            role = role_from_hint(role_str) or Role.USER
 
         content_items = record.get("content", [])
         if isinstance(content_items, str):
@@ -475,9 +478,13 @@ class WorkBuddyAdapter(BaseAdapter):
                 if txt:
                     text_parts.append(txt)
                     parts.append(MessagePart(type=MessagePartType.TEXT, content=txt))
-            elif itype in ("image", "image_blob_ref"):
-                img_path = item.get("blob_path", item.get("url", ""))
-                img_name = item.get("original_filename", "image.png")
+            # input_image / input_file 是用户粘贴的截图和附件，旧实现不认这两种
+            # 类型：附件既不出现在正文也没有占位符，只带附件的消息更是被整条丢掉。
+            elif itype in ("image", "image_blob_ref", "input_image", "output_image", "image_url"):
+                img_path = item.get("blob_path") or item.get("url") or item.get("image") or item.get("image_url") or ""
+                if isinstance(img_path, dict):
+                    img_path = img_path.get("url", "")
+                img_name = item.get("original_filename") or item.get("filename") or "image.png"
                 images.append({"path": img_path, "name": img_name})
                 parts.append(MessagePart(
                     type=MessagePartType.IMAGE,
@@ -485,6 +492,34 @@ class WorkBuddyAdapter(BaseAdapter):
                     file_name=img_name,
                     metadata={"path": img_path}
                 ))
+            elif itype in ("input_file", "output_file", "file", "file_ref", "input_document"):
+                file_path = item.get("blob_path") or item.get("url") or item.get("file_url") or item.get("file") or ""
+                if isinstance(file_path, dict):
+                    file_path = file_path.get("url", "")
+                file_name = (
+                    item.get("original_filename") or item.get("filename")
+                    or item.get("name") or "file"
+                )
+                parts.append(MessagePart(
+                    type=MessagePartType.FILE,
+                    content=f"[文件: {file_name}]",
+                    file_name=file_name,
+                    metadata={"path": file_path}
+                ))
+            else:
+                # 认不出的 item 类型也要留痕：静默丢弃会让消息（甚至整条对话）
+                # 在导出里凭空消失，看得见的原始内容至少还能人工恢复。
+                txt = item.get("text", item.get("content", ""))
+                if isinstance(txt, (dict, list)):
+                    txt = json.dumps(txt, ensure_ascii=False)
+                if not txt:
+                    try:
+                        txt = json.dumps(item, ensure_ascii=False)
+                    except (TypeError, ValueError):
+                        txt = str(item)
+                if txt:
+                    text_parts.append(str(txt))
+                    parts.append(MessagePart(type=MessagePartType.TEXT, content=str(txt)))
 
         # content 仅包含文本部分，图片信息由 IMAGE parts 结构化携带。
         # 避免预览/导出时 content 兜底与 IMAGE parts 重复展示图片描述。
@@ -509,8 +544,8 @@ class WorkBuddyAdapter(BaseAdapter):
             parent_id=record.get("parentId"),
             parts=parts,
             model=model,
-            token_usage=token_usage,
-            metadata={"status": record.get("status")}
+            token_usage=self._normalize_token_usage(token_usage),
+            metadata={"status": record.get("status"), "raw_role": role_str}
         )
 
     @staticmethod

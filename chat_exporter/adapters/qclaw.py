@@ -15,6 +15,8 @@ class QClawAdapter(BaseAdapter):
         super().__init__()
         self.db_path = os.path.join(str(self.user_home), ".qclaw", "memory", "lossless", "lcm.db")
         self._cached_conversations = None
+        # 最近一次读取失败的原因，供 GUI 在“读不出来”时显示具体诊断
+        self.last_error: Optional[str] = None
 
     def detect(self) -> bool:
         return os.path.exists(self.db_path)
@@ -108,6 +110,7 @@ class QClawAdapter(BaseAdapter):
         return conversations
 
     def get_conversation(self, conv_id: str) -> Optional[Conversation]:
+        self.last_error = None
         if not self.detect():
             return None
 
@@ -159,8 +162,13 @@ class QClawAdapter(BaseAdapter):
                 metadata={"session_id": conv_row["session_id"], "msg_count": len(messages)}
             )
             return conv
-        except Exception:
-            return None
+        except Exception as exc:
+            # None 只保留给“这条对话确实不存在”。schema 变动、数据库被锁这类
+            # 真实故障过去也被压成 None，调用方只能显示“找不到对话”，
+            # 用户永远看不到真正的原因。现在把异常抛给调用方（GUI 的预览/
+            # 批量导出两条路径都已 try/except 并展示错误文案）。
+            self.last_error = f"{type(exc).__name__}: {exc}"
+            raise
         finally:
             if conn:
                 conn.close()

@@ -172,8 +172,14 @@ class MarkdownExporterTests(unittest.TestCase):
         # 只有一个消息章节（空消息被跳过）
         self.assertEqual(md.count("## "), 1)
 
-    def test_tool_only_messages_are_skipped(self):
-        """纯 TOOL 角色消息应被跳过（effective_role 返回 None）。"""
+    def test_tool_messages_stay_out_of_preview_but_survive_full_export(self):
+        """工具消息不进阅读视图，但必须留在完整导出里。
+
+        QClaw 把工具输出存成独立的 role=tool 消息而不是 assistant 的 tool_result
+        part。用 effective_role（预览可见性规则）决定导出内容时，实测一条真实对话
+        97% 的字节会从"完整导出"里消失，而同样的内容在 WorkBuddy 里却被导出——
+        差别只是存储形状。导出保留、预览过滤。
+        """
         from chat_exporter.markdown_exporter import MarkdownExporter
 
         msgs = [
@@ -182,11 +188,19 @@ class MarkdownExporterTests(unittest.TestCase):
             Message(role=Role.ASSISTANT, content="AI回答", parts=[]),
         ]
         conv = Conversation(id="6", title="test6", messages=msgs, source_app="QClaw")
+
         md = MarkdownExporter().export(conv)
         self.assertIn("用户问题", md)
         self.assertIn("AI回答", md)
-        self.assertNotIn("工具输出", md)
-        self.assertEqual(md.count("## "), 2)
+        self.assertIn("工具输出", md)
+
+        # 阅读视图仍然只有用户和 AI 正文。
+        self.assertEqual([role for _m, role, _t in visible_messages(conv)], [Role.USER, Role.ASSISTANT])
+
+        # 需要纯净归档时可以关掉。
+        lean = MarkdownExporter(include_tool_messages=False).export(conv)
+        self.assertNotIn("工具输出", lean)
+        self.assertEqual(lean.count("## "), 2)
 
     def test_mro_show_preview_resolves_to_v2(self):
         """_show_preview 应解析到 gui_cn_v2 而非 gui_cn（死代码已清理）。"""

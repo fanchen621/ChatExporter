@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import threading
 import tkinter as tk
 from datetime import datetime
@@ -9,7 +10,8 @@ from typing import Dict, List, Optional, Tuple
 from .gui_cn import ChatExporterGUI as BaseChineseGUI
 from .models import AppInfo, Conversation, Role
 from .preview_utils import conversation_search_text, message_preview_text, plain_preview_text, visible_messages
-from .ui_theme import FONT_LATIN, FONT_UI, Metrics, Palette
+from .search_index import conversation_stamp
+from .ui_theme import FONT_LATIN, FONT_MONO, FONT_UI, Metrics, Palette
 
 
 class ChatExporterGUI(BaseChineseGUI):
@@ -32,7 +34,8 @@ class ChatExporterGUI(BaseChineseGUI):
         self.search_hint_var = None
         self.preview_find_var = None
         self.preview_find_count_var = None
-        self._content_index: Dict[Tuple[str, str], str] = {}
+        # (来源, 对话id) -> (更新戳, 可检索文本)；戳不匹配视为未命中
+        self._content_index: Dict[Tuple[str, str], Tuple[str, str]] = {}
         self._content_search_generation = 0
         self._content_search_cancel: Optional[threading.Event] = None
         self._preview_plain_text = ""
@@ -376,6 +379,7 @@ class ChatExporterGUI(BaseChineseGUI):
         ttk.Label(footer, text="Ctrl+F 搜索", style="Muted.TLabel").pack(side=tk.RIGHT)
 
     def _on_search_mode_changed(self, _event=None):
+        self._invalidate_search_work()
         mode = self.search_mode_var.get() if self.search_mode_var else self.SEARCH_MODE_TITLE
         self._search_placeholder_active = True
         if mode == self.SEARCH_MODE_CONTENT:
@@ -395,6 +399,7 @@ class ChatExporterGUI(BaseChineseGUI):
             self.search_entry.configure(fg=Palette.TEXT_DISABLED)
 
     def _clear_search(self):
+        self._invalidate_search_work()
         self._search_placeholder_active = False
         self.search_var.set("")
         self.search_entry.focus_set()
@@ -477,6 +482,8 @@ class ChatExporterGUI(BaseChineseGUI):
         self.library_footer_var.set("正在读取本机对话正文并建立临时索引…")
         self._set_status("正在按对话内容检索…", progress=0, tone="info")
 
+        persistent = self._persistent_search_index()
+
         def worker():
             matches = []
             total = max(1, len(conversations))
@@ -484,7 +491,17 @@ class ChatExporterGUI(BaseChineseGUI):
                 if cancel.is_set():
                     return
                 cache_key = (adapter.name, str(conv.id))
-                searchable = self._content_index.get(cache_key)
+                stamp = conversation_stamp(conv)
+                # 内存缓存必须带 stamp 校验：TRAE 解锁密钥后同一批 id 会换上
+                # 真正的正文，裸 (来源, id) 键会让解锁前的空文本粘住不放。
+                cached = self._content_index.get(cache_key)
+                searchable = cached[1] if cached and cached[0] == stamp else None
+                if searchable is None and persistent:
+                    # 磁盘索引按 (来源, id, 更新戳) 命中：第二次启动后的全文检索
+                    # 不再重读几十 MB 的对话正文，旧数据靠 stamp 自动失效。
+                    searchable = persistent.get(adapter.name, str(conv.id), stamp)
+                    if searchable is not None:
+                        self._content_index[cache_key] = (stamp, searchable)
                 if searchable is None:
                     full = conv
                     if not conv.messages:
@@ -497,7 +514,9 @@ class ChatExporterGUI(BaseChineseGUI):
                             conv.messages = loaded.messages
                             conv.metadata.update(loaded.metadata or {})
                     searchable = conversation_search_text(full)
-                    self._content_index[cache_key] = searchable
+                    self._content_index[cache_key] = (stamp, searchable)
+                    if persistent:
+                        persistent.put(adapter.name, str(conv.id), stamp, searchable)
                 if query in searchable:
                     matches.append((index - 1, conv))
                 if index == total or index % 4 == 0:
@@ -551,16 +570,19 @@ class ChatExporterGUI(BaseChineseGUI):
 
         note = tk.Frame(parent, bg=Palette.INFO_SOFT, bd=0, padx=14, pady=9)
         note.grid(row=1, column=0, sticky="ew", padx=Metrics.CARD_PAD, pady=(0, 8))
-        tk.Label(
+        note_label = tk.Label(
             note,
-            text="预览已精简：只展示用户和 AI 的完整可见正文。思考、工具调用和工具结果仍会保留在 Markdown 导出中。",
+            text="预览已精简：只展示用户和 AI 的完整可见正文。思考、工具调用和工具结果仍会保留在完整导出中。",
             bg=Palette.INFO_SOFT,
             fg=Palette.TEXT_SECONDARY,
             font=(FONT_UI, 9),
             anchor=tk.W,
             justify=tk.LEFT,
             wraplength=760,
-        ).pack(fill=tk.X)
+        )
+        note_label.pack(fill=tk.X)
+        # 折行宽度跟随实际宽度，窄分栏下不再挤出难看的两三字短行。
+        note.bind("<Configure>", lambda e: note_label.configure(wraplength=max(240, e.width - 32)))
 
         toolbar = tk.Frame(parent, bg=Palette.SURFACE, bd=0)
         toolbar.grid(row=2, column=0, sticky="ew", padx=Metrics.CARD_PAD, pady=(0, 8))
@@ -639,13 +661,48 @@ class ChatExporterGUI(BaseChineseGUI):
         self.preview_text.tag_configure("search_current", background="#FEC84B", foreground=Palette.TEXT)
         self._show_preview_placeholder()
 
+    @staticmethod
+    def _body_segments(text: str, body_tag: str):
+        """把正文拆成普通段和 ``` 代码块段，代码块用等宽字体和浅底色渲染。
+
+        奇数个围栏说明最后一个代码块没闭合（对话被截停是常态），
+        余下内容仍按代码渲染，绝不丢字。
+        """
+        segments = []
+        parts = re.split(r"(?m)^[ \t]*```[^\n]*$\n?", text)
+        for index, chunk in enumerate(parts):
+            is_code = index % 2 == 1
+            if not chunk.strip():
+                continue
+            if is_code:
+                segments.append((chunk.rstrip("\n") + "\n", "code_block"))
+            else:
+                segments.append((chunk.strip("\n") + "\n", body_tag))
+        if not segments and text.strip():
+            segments.append((text.strip("\n") + "\n", body_tag))
+        return segments
+
     def _setup_text_tags(self):
         super()._setup_text_tags()
         t = self.preview_text
-        t.tag_configure("user_header", font=(FONT_UI, 10, "bold"), foreground=Palette.ACCENT_PRESSED, spacing1=12, spacing3=5)
-        t.tag_configure("user_body", foreground=Palette.TEXT, lmargin1=22, lmargin2=22, rmargin=22, spacing3=10)
-        t.tag_configure("assistant_header", font=(FONT_UI, 10, "bold"), foreground=Palette.SUCCESS, spacing1=12, spacing3=5)
-        t.tag_configure("assistant_body", foreground=Palette.TEXT, lmargin1=22, lmargin2=22, rmargin=22, spacing3=10)
+        t.tag_configure("user_header", font=(FONT_UI, 10, "bold"), foreground=Palette.ACCENT_PRESSED, spacing1=14, spacing3=6)
+        t.tag_configure("user_body", foreground=Palette.TEXT, lmargin1=22, lmargin2=22, rmargin=22, spacing2=2, spacing3=10)
+        t.tag_configure("assistant_header", font=(FONT_UI, 10, "bold"), foreground=Palette.SUCCESS, spacing1=14, spacing3=6)
+        t.tag_configure("assistant_body", foreground=Palette.TEXT, lmargin1=22, lmargin2=22, rmargin=22, spacing2=2, spacing3=10)
+        t.tag_configure("header_meta", font=(FONT_UI, 8), foreground=Palette.TEXT_MUTED)
+        t.tag_configure("message_gap", font=(FONT_UI, 4), spacing1=6, spacing3=6)
+        t.tag_configure(
+            "code_block",
+            font=(FONT_MONO, 9),
+            foreground=Palette.TEXT,
+            background=Palette.CODE_BG,
+            lmargin1=30,
+            lmargin2=30,
+            rmargin=30,
+            spacing1=8,
+            spacing3=8,
+            wrap=tk.NONE,
+        )
 
     def _show_preview_placeholder(self):
         self._preview_plain_text = ""
@@ -685,10 +742,17 @@ class ChatExporterGUI(BaseChineseGUI):
                 full = conv
                 if adapter and not conv.messages:
                     loaded = adapter.get_conversation(conv.id)
-                    if loaded:
-                        full = loaded
-                        conv.messages = loaded.messages
-                        conv.metadata.update(loaded.metadata or {})
+                    if loaded is None:
+                        # 读不出来是"读取失败"，不是"这条对话没有正文"。
+                        # 旧实现把两者显示成同一句话，用户会以为对话本来就是空的。
+                        self._post_ui(
+                            self._show_preview_error,
+                            "无法从本机存储读取这条对话（来源可能正在写入，或 TRAE 密钥尚未解锁）。",
+                        )
+                        return
+                    full = loaded
+                    conv.messages = loaded.messages
+                    conv.metadata.update(loaded.metadata or {})
                 self._post_ui(self._show_preview, "", full, generation)
             except Exception as exc:
                 self._post_ui(self._set_status, f"预览失败：{exc}", -1, "danger")
@@ -718,20 +782,23 @@ class ChatExporterGUI(BaseChineseGUI):
                 "empty_body",
             ))
         else:
-            for message, eff_role, text in visible:
+            for index, (message, eff_role, text) in enumerate(visible):
                 role_name = "用户" if eff_role == Role.USER else "AI 助手"
                 header_tag = "user_header" if eff_role == Role.USER else "assistant_header"
                 body_tag = "user_body" if eff_role == Role.USER else "assistant_body"
-                timestamp = message.timestamp.strftime("%Y-%m-%d %H:%M:%S") if message.timestamp else ""
-                header = role_name
-                if timestamp:
-                    header += f"  ·  {timestamp}"
+                if index:
+                    segments.append(("\n", "message_gap"))
+                segments.append((f"{role_name}", header_tag))
+                meta_bits = []
+                if message.timestamp:
+                    meta_bits.append(message.timestamp.strftime("%Y-%m-%d %H:%M"))
                 if message.model and eff_role == Role.ASSISTANT:
-                    header += f"  ·  {message.model}"
-                segments.append((header + "\n", header_tag))
+                    meta_bits.append(message.model)
+                if meta_bits:
+                    segments.append((f"   {' · '.join(meta_bits)}", "header_meta"))
+                segments.append(("\n", header_tag))
                 # 用户/AI 正文：kind="text" 永远不截断，确保会话尾部完整可见。
-                segments.append((self._preview_part(text or "", "text") + "\n\n", body_tag))
-                segments.append(("────────────────────────────────────────\n\n", "separator"))
+                segments.extend(self._body_segments(self._preview_part(text or "", "text"), body_tag))
 
         self._start_preview_render(segments, self._preview_plain_text, generation)
         # 不在此处设置"完成"状态：_start_preview_render 是异步的（root.after 调度），
@@ -879,18 +946,56 @@ class ChatExporterGUI(BaseChineseGUI):
             "available": available,
         }
 
-    def _select_app(self, adapter):
+    def _persistent_search_index(self):
+        """磁盘索引不可用时返回 None，检索自动退回纯内存路径。"""
+        cached = getattr(self, "_search_index_instance", None)
+        if cached is not None:
+            return cached or None
+        try:
+            from .search_index import SearchIndex
+            instance = SearchIndex()
+            self._search_index_instance = instance if instance.available else False
+        except Exception:
+            self._search_index_instance = False
+        return self._search_index_instance or None
+
+    def _invalidate_search_work(self):
+        """作废在途的全文检索结果。
+
+        只 set cancel 事件不够：worker 只在循环顶部检查 cancel，最后一次
+        _post_ui(done) 仍会落到主线程，把已经清空的搜索结果重新画回列表。
+        """
         if self._content_search_cancel:
             self._content_search_cancel.set()
+            self._content_search_cancel = None
+        self._content_search_generation += 1
+
+    def _invalidate_async_work(self):
+        """换来源或刷新时，连在途的预览一起作废。
+
+        预览线程没有 cancel 通道，只靠 _preview_generation 判活；旧实现在
+        换来源时不 bump 它，于是上一个来源的预览会在新来源下变成
+        selected_conv，导出的就是另一个来源的对话。
+        """
+        self._invalidate_search_work()
+        self._preview_generation += 1
+
+    def _select_app(self, adapter):
+        self._invalidate_async_work()
         super()._select_app(adapter)
         if self.preview_find_var:
             self.preview_find_var.set("")
         self._sync_action_states()
 
     def _reload_current_source(self):
+        self._invalidate_async_work()
+        self.selected_conv = None
         if self.current_adapter:
             prefix = self.current_adapter.name
-            self._content_index = {key: value for key, value in self._content_index.items() if key[0] != prefix}
+            # 用重新赋值而不是原地改：搜索 worker 可能正在往同一个 dict 里写。
+            self._content_index = {
+                key: value for key, value in list(self._content_index.items()) if key[0] != prefix
+            }
         super()._reload_current_source()
 
     def _bind_shortcuts(self):

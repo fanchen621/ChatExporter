@@ -4,7 +4,7 @@ import os
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-from typing import List
+from typing import List, Tuple
 
 from .gui_modern import ChatExporterGUI as ModernGUI
 from .markdown_exporter import MarkdownExporter
@@ -1014,6 +1014,14 @@ class ChatExporterGUI(ModernGUI):
         if not self.selected_conv:
             return
         conv = self.selected_conv
+        if not conv.messages:
+            # 预览读取失败时 selected_conv 还是那个空壳，直接导出会写出只有元数据的文件。
+            messagebox.showwarning(
+                "无法导出",
+                f"“{conv.title or '这条对话'}”没有读到任何消息，可能是来源正在写入或密钥未解锁。\n"
+                "请先刷新当前来源，确认预览能显示正文后再导出。",
+            )
+            return
         default_name = MarkdownExporter.sanitize_filename(conv.title)
         if conv.updated_at:
             default_name += f"_{conv.updated_at.strftime('%Y%m%d_%H%M%S')}"
@@ -1052,24 +1060,37 @@ class ChatExporterGUI(ModernGUI):
 
         def worker():
             try:
-                count = self._batch_export_full_conversations(conversations, output_dir, adapter)
-                self._post_ui(self._on_batch_export_complete, count, output_dir)
+                count, failures = self._batch_export_full_conversations(conversations, output_dir, adapter)
+                self._post_ui(self._on_batch_export_complete, count, output_dir, failures)
             except Exception as exc:
                 self._post_ui(self._on_batch_export_failed, str(exc))
 
         threading.Thread(target=worker, daemon=True, name="batch-export").start()
 
-    def _batch_export_full_conversations(self, conversations: List[Conversation], output_dir: str, adapter) -> int:
+    def _batch_export_full_conversations(self, conversations: List[Conversation], output_dir: str, adapter):
         os.makedirs(output_dir, exist_ok=True)
         exporter = MarkdownExporter(include_metadata=True, include_timestamp=True, include_thinking=True)
         total = len(conversations)
         exported = 0
+        failures: List[Tuple[str, str]] = []
         for index, conv in enumerate(conversations, start=1):
             full = conv
             if adapter and not conv.messages:
-                loaded = adapter.get_conversation(conv.id)
-                if loaded:
-                    full = loaded
+                loaded = None
+                try:
+                    loaded = adapter.get_conversation(conv.id)
+                except Exception as exc:
+                    failures.append((conv.title or str(conv.id), f"读取失败：{exc}"))
+                    continue
+                if loaded is None:
+                    # 读不出来就不写文件。旧实现在这里静默回退到空壳 conv，
+                    # 写出一个只有元数据的 .md 并计入成功，用户永远不知道丢了什么。
+                    failures.append((conv.title or str(conv.id), "读取失败：来源返回空"))
+                    continue
+                full = loaded
+            if not full.messages:
+                failures.append((full.title or str(full.id), "没有可导出的消息"))
+                continue
             safe_title = MarkdownExporter.sanitize_filename(full.title)
             timestamp = full.updated_at.strftime("%Y%m%d_%H%M%S") if full.updated_at else ""
             filename = f"{safe_title}_{timestamp}.md" if timestamp else f"{safe_title}.md"
@@ -1079,7 +1100,11 @@ class ChatExporterGUI(ModernGUI):
             while os.path.exists(path):
                 path = f"{base}_{counter}{ext}"
                 counter += 1
-            exporter.export(full, path)
+            try:
+                exporter.export(full, path)
+            except Exception as exc:
+                failures.append((full.title or str(full.id), f"写入失败：{exc}"))
+                continue
             exported += 1
             progress = int(index / total * 100)
             self._post_ui(
@@ -1088,12 +1113,25 @@ class ChatExporterGUI(ModernGUI):
                 progress,
                 "info",
             )
-        return exported
+        return exported, failures
 
-    def _on_batch_export_complete(self, count: int, output_dir: str):
-        self._set_status(f"已导出 {count} 条对话", progress=100, tone="success")
+    def _on_batch_export_complete(self, count, output_dir: str, failures=None):
+        failures = failures or []
+        if not failures:
+            self._set_status(f"已导出 {count} 条对话", progress=100, tone="success")
+            self._sync_action_states()
+            messagebox.showinfo("导出完成", f"已将 {count} 个 Markdown 文件导出到：\n{output_dir}")
+            return
+
+        self._set_status(f"已导出 {count} 条，{len(failures)} 条失败", progress=100, tone="warning")
         self._sync_action_states()
-        messagebox.showinfo("导出完成", f"已将 {count} 个 Markdown 文件导出到：\n{output_dir}")
+        detail = "\n".join(f"· {title}：{reason}" for title, reason in failures[:12])
+        if len(failures) > 12:
+            detail += f"\n… 另有 {len(failures) - 12} 条"
+        messagebox.showwarning(
+            "导出完成（有失败项）",
+            f"已导出 {count} 个文件到：\n{output_dir}\n\n以下 {len(failures)} 条没有导出：\n{detail}",
+        )
 
     def _on_batch_export_failed(self, error: str):
         self._set_status(f"批量导出失败：{error}", tone="danger")
