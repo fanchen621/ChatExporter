@@ -1,0 +1,5 @@
+# 开发与 CI 依赖（运行程序本身不需要）
+-r requirements.txt
+pytest>=8.0
+pyinstaller>=6.0
+pillow>=10.0
