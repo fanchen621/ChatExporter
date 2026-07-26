@@ -36,12 +36,14 @@ class ChatExporterGUI:
         "qclaw": "QC",
         "marvis": "MV",
     }
+    # 来源徽标色：始终画在深色侧栏上，两个主题共用一套。
+    # 全部压低饱和度、锚在暖区，跟 Claude 珊瑚同族而不互相打架。
     APP_ACCENTS = {
-        "trae": "#635BFF",
-        "qoderwork": "#2E90FA",
-        "workbuddy": "#12B76A",
-        "qclaw": "#F79009",
-        "marvis": "#E04F9B",
+        "trae": "#D97757",       # 珊瑚
+        "qoderwork": "#E0A96D",  # 琥珀
+        "workbuddy": "#A8B37E",  # 鼠尾草
+        "qclaw": "#8FB3C7",      # 雾蓝
+        "marvis": "#C08FB0",     # 藕荷
     }
 
     def __init__(self):
@@ -140,7 +142,7 @@ class ChatExporterGUI:
         brand.grid(row=0, column=0, sticky="ew", padx=18, pady=(22, 18))
         logo = tk.Label(
             brand, text="CE", width=3, height=1,
-            bg=Palette.ACCENT, fg="#FFFFFF",
+            bg=Palette.ACCENT, fg=Palette.ON_ACCENT,
             font=(FONT_LATIN, 13, "bold"),
             relief="flat", bd=0, padx=8, pady=8,
         )
@@ -340,8 +342,8 @@ class ChatExporterGUI:
         self.preview_source_badge = tk.Label(
             header,
             text="LOCAL",
-            bg=Palette.SUCCESS_SOFT,
-            fg=Palette.SUCCESS,
+            bg=Palette.BADGE_BG,
+            fg=Palette.BADGE_FG,
             font=(FONT_LATIN, 8, "bold"),
             padx=9,
             pady=4,
@@ -518,7 +520,7 @@ class ChatExporterGUI:
             text=self.APP_INITIALS.get(name, name[:2].upper()),
             width=3,
             bg=Palette.SIDEBAR_RAISED if available else Palette.SIDEBAR,
-            fg=accent if available else "#64748B",
+            fg=accent if available else Palette.SIDEBAR_TEXT_OFF,
             font=(FONT_LATIN, 9, "bold"),
             padx=4,
             pady=6,
@@ -527,13 +529,13 @@ class ChatExporterGUI:
         labels = tk.Frame(body, bg=Palette.SIDEBAR)
         labels.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(10, 0))
         title = tk.Label(labels, text=info.display_name, anchor=tk.W, bg=Palette.SIDEBAR,
-                         fg=Palette.TEXT_ON_DARK if available else "#64748B", font=(FONT_UI, 9, "bold"))
+                         fg=Palette.TEXT_ON_DARK if available else Palette.SIDEBAR_TEXT_OFF, font=(FONT_UI, 9, "bold"))
         title.pack(fill=tk.X)
         meta = tk.Label(labels, text="Ready" if available else "Not detected", anchor=tk.W,
-                        bg=Palette.SIDEBAR, fg=Palette.TEXT_ON_DARK_MUTED if available else "#475569",
+                        bg=Palette.SIDEBAR, fg=Palette.TEXT_ON_DARK_MUTED if available else Palette.SIDEBAR_TEXT_OFF,
                         font=(FONT_UI, 8))
         meta.pack(fill=tk.X, pady=(2, 0))
-        status = tk.Frame(body, width=7, height=7, bg=Palette.SUCCESS if available else "#475569")
+        status = tk.Frame(body, width=7, height=7, bg=Palette.SUCCESS if available else Palette.SIDEBAR_DOT_OFF)
         status.pack(side=tk.RIGHT, padx=(6, 1))
         status.pack_propagate(False)
 
@@ -569,7 +571,7 @@ class ChatExporterGUI:
             for key in ("row", "body", "labels", "title", "meta"):
                 row[key].configure(bg=bg)
             row["avatar"].configure(bg=Palette.SIDEBAR_HOVER if selected else Palette.SIDEBAR_RAISED)
-            row["title"].configure(fg=Palette.TEXT_ON_DARK if row["available"] else "#64748B")
+            row["title"].configure(fg=Palette.TEXT_ON_DARK if row["available"] else Palette.SIDEBAR_TEXT_OFF)
 
         self.selected_conv = None
         self.current_conversations = []
@@ -1131,7 +1133,7 @@ class ChatExporterGUI:
         for child in frame.winfo_children():
             child.destroy()
         frame.pack(fill=tk.X, pady=(14, 0))
-        card = tk.Frame(frame, bg=Palette.SUCCESS_SOFT, highlightbackground="#ABEFC6", highlightthickness=1,
+        card = tk.Frame(frame, bg=Palette.SUCCESS_SOFT, highlightbackground=Palette.SUCCESS, highlightthickness=1,
                         padx=14, pady=12)
         card.pack(fill=tk.X)
         tk.Label(card, text="VERIFIED KEY", bg=Palette.SUCCESS_SOFT, fg=Palette.SUCCESS,

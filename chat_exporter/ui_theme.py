@@ -12,76 +12,109 @@ from tkinter import ttk
 
 
 class Palette:
-    WINDOW = "#F4F6FA"
-    SIDEBAR = "#0F172A"
-    SIDEBAR_RAISED = "#172033"
-    SIDEBAR_HOVER = "#1E293B"
+    """Claude 风格：温暖的燕麦纸底 + 珊瑚陶土主色 + 石板墨色文字。
+
+    刻意避开饱和的蓝紫/荧光绿——整套色相收在暖区，靠明度而不是彩度拉开层次。
+    带文字的填充色（按钮）走 ACCENT，对比度 ≥ 4.5:1；纯图形（圆点、图标）走
+    更亮的 AI_ACCENT，图形对比只需 3:1。
+    """
+
+    WINDOW = "#F0EEE6"          # 燕麦纸：整个窗口的底
+    SIDEBAR = "#262624"         # 暖近黑，不是冷灰
+    SIDEBAR_RAISED = "#333331"
+    SIDEBAR_HOVER = "#3D3D3A"
     SURFACE = "#FFFFFF"
-    SURFACE_ALT = "#F8FAFC"
-    SURFACE_HOVER = "#F2F4F7"
-    SURFACE_PRESSED = "#EAECF0"
-    BORDER = "#E4E7EC"
-    BORDER_STRONG = "#D0D5DD"
-    TEXT = "#101828"
-    TEXT_SECONDARY = "#475467"
-    TEXT_MUTED = "#667085"
-    TEXT_DISABLED = "#98A2B3"
-    TEXT_ON_DARK = "#F8FAFC"
-    TEXT_ON_DARK_MUTED = "#94A3B8"
-    ACCENT = "#635BFF"
-    ACCENT_HOVER = "#5147E5"
-    ACCENT_PRESSED = "#4338CA"
-    ACCENT_SOFT = "#EEF0FF"
-    ACCENT_SOFT_HOVER = "#E4E7FF"
-    # 阅读视图里的角色色：用户=品牌紫，AI=青绿，冷暖分明又不刺眼
-    AI_ACCENT = "#0E9384"
-    SUCCESS = "#12B76A"
-    SUCCESS_SOFT = "#ECFDF3"
-    WARNING = "#F79009"
-    WARNING_SOFT = "#FFFAEB"
-    DANGER = "#F04438"
-    DANGER_SOFT = "#FEF3F2"
-    INFO = "#2E90FA"
-    INFO_SOFT = "#EFF8FF"
-    CODE_BG = "#F2F4F7"
-    SELECTION = "#EEF0FF"
+    SURFACE_ALT = "#FAF9F5"     # 象牙
+    SURFACE_HOVER = "#F3F1EA"   # 与 WINDOW 刻意错开：换肤查找表按色值建，同值会互相顶掉
+    SURFACE_PRESSED = "#E7E4D9"
+    BORDER = "#E5E2D9"
+    BORDER_STRONG = "#D3CFC2"
+    TEXT = "#191919"            # 石板墨
+    TEXT_SECONDARY = "#3D3D3A"
+    TEXT_MUTED = "#6E6B62"
+    TEXT_DISABLED = "#9B978C"
+    TEXT_ON_DARK = "#FAF9F5"
+    TEXT_ON_DARK_MUTED = "#A8A49A"
+    SIDEBAR_TEXT_OFF = "#908C81"     # 侧栏里"未检测到"的来源，仍是正文级 4.5:1
+    SIDEBAR_DOT_OFF = "#4A4A47"
+    ACCENT = "#B5583A"          # 主填充：白字上去是 4.7:1，过 AA
+    ACCENT_HOVER = "#A34E33"    # 悬停压深一档：亮珊瑚上的白字只有 3.9:1，过不了 AA
+    ACCENT_PRESSED = "#9C4A2F"
+    ACCENT_SOFT = "#F7EBE5"
+    ACCENT_SOFT_HOVER = "#F0DDD3"
+    ACCENT_DISABLED = "#E3C8BC"
+    ON_ACCENT = "#FFFFFF"       # 主色填充上的文字
+    ON_ACCENT_MUTED = "#F3DED5"
+    # 阅读视图角色色：AI 用 Claude 珊瑚，用户用暖石中性色——克制才像 Claude
+    AI_ACCENT = "#C96442"
+    USER_ACCENT = "#78736A"
+    SUCCESS = "#477655"         # 苔绿，不是荧光绿
+    SUCCESS_SOFT = "#EAF0EA"
+    WARNING = "#8F6525"
+    WARNING_SOFT = "#F7EFE0"
+    DANGER = "#B4432F"
+    DANGER_SOFT = "#F8E9E5"
+    INFO = "#526F8C"            # 唯一的冷色，只用于状态点
+    INFO_SOFT = "#EAEFF4"
+    # 来源徽章：它标的是"这段内容来自哪个平台"，是元信息不是状态，
+    # 所以走主色的柔和档，不借用 SUCCESS 的绿——绿色在这套暖色里格格不入。
+    BADGE_BG = "#F7EBE5"
+    BADGE_FG = "#8F4229"
+    CODE_BG = "#F5F3ED"
+    SELECTION = "#F7EBE5"
+    SCROLLBAR = "#CFCABC"
+    SCROLLBAR_TROUGH = "#F6F4EC"  # 同上，且提亮后滑块更清楚
+    SCROLLBAR_ACTIVE = "#A9A395"
 
 
 LIGHT_THEME = {name: value for name, value in vars(Palette).items() if not name.startswith("_")}
 
 DARK_THEME = {
-    "WINDOW": "#0B1120",
-    "SIDEBAR": "#070B14",
-    "SIDEBAR_RAISED": "#151E31",
-    "SIDEBAR_HOVER": "#1D283D",
-    "SURFACE": "#111A2B",
-    "SURFACE_ALT": "#18233A",
-    "SURFACE_HOVER": "#1C2740",
-    "SURFACE_PRESSED": "#243050",
-    "BORDER": "#26334D",
-    "BORDER_STRONG": "#35435F",
-    "TEXT": "#E9EEF8",
-    "TEXT_SECONDARY": "#C2CCDE",
-    "TEXT_MUTED": "#94A3B8",
-    "TEXT_DISABLED": "#64748B",
-    "TEXT_ON_DARK": "#F8FAFC",
-    "TEXT_ON_DARK_MUTED": "#94A3B8",
-    "ACCENT": "#8B85FF",
-    "ACCENT_HOVER": "#9D98FF",
-    "ACCENT_PRESSED": "#B4B0FF",
-    "ACCENT_SOFT": "#232048",
-    "ACCENT_SOFT_HOVER": "#2C2857",
-    "AI_ACCENT": "#2ED3B7",
-    "SUCCESS": "#3DD68C",
-    "SUCCESS_SOFT": "#11291F",
-    "WARNING": "#FDB022",
-    "WARNING_SOFT": "#2A1F0B",
-    "DANGER": "#FF7A70",
-    "DANGER_SOFT": "#2E1512",
-    "INFO": "#63A9FF",
-    "INFO_SOFT": "#0F2138",
-    "CODE_BG": "#18233A",
-    "SELECTION": "#232048",
+    # Claude 深色：暖炭底，不是蓝黑。主色提亮一档，按钮改用深字，
+    # 亮珊瑚配近黑文字是 5.4:1，比白字的 3.1:1 干净得多。
+    "WINDOW": "#1B1A18",
+    "SIDEBAR": "#141312",
+    "SIDEBAR_RAISED": "#2A2A27",
+    "SIDEBAR_HOVER": "#373733",
+    "SURFACE": "#262624",
+    "SURFACE_ALT": "#30302E",
+    "SURFACE_HOVER": "#3A3A37",
+    "SURFACE_PRESSED": "#454541",
+    "BORDER": "#3A3936",
+    "BORDER_STRONG": "#524F49",
+    "TEXT": "#F5F4EF",
+    "TEXT_SECONDARY": "#D6D3CA",
+    "TEXT_MUTED": "#A19D93",
+    "TEXT_DISABLED": "#726E66",
+    "TEXT_ON_DARK": "#FAF9F5",
+    "TEXT_ON_DARK_MUTED": "#A8A49A",
+    "SIDEBAR_TEXT_OFF": "#817D72",
+    "SIDEBAR_DOT_OFF": "#4A4A47",
+    "ACCENT": "#D97757",
+    "ACCENT_HOVER": "#E38A6C",
+    "ACCENT_PRESSED": "#EFA087",
+    "ACCENT_SOFT": "#3A251C",
+    "ACCENT_SOFT_HOVER": "#4A3025",
+    "ACCENT_DISABLED": "#5C3F33",
+    "ON_ACCENT": "#1B1A18",
+    "ON_ACCENT_MUTED": "#4A3025",
+    "AI_ACCENT": "#E08A6B",
+    "USER_ACCENT": "#A8A296",
+    "SUCCESS": "#7FB08C",
+    "SUCCESS_SOFT": "#1E2A21",
+    "WARNING": "#DDA84E",
+    "WARNING_SOFT": "#2E2517",
+    "DANGER": "#E38270",
+    "DANGER_SOFT": "#331C18",
+    "INFO": "#8AA9C4",
+    "INFO_SOFT": "#1C2530",
+    "BADGE_BG": "#3A251C",
+    "BADGE_FG": "#E9A184",
+    "CODE_BG": "#2C2C2A",
+    "SELECTION": "#3A251C",
+    "SCROLLBAR": "#4E4D48",
+    "SCROLLBAR_TROUGH": "#242321",
+    "SCROLLBAR_ACTIVE": "#6E6B63",
 }
 
 THEMES = {"light": LIGHT_THEME, "dark": DARK_THEME}
@@ -99,7 +132,12 @@ def apply_theme(name: str) -> str:
     return name if name in THEMES else "light"
 
 
-_FG_KEYS = ("TEXT", "TEXT_SECONDARY", "TEXT_MUTED", "TEXT_DISABLED", "TEXT_ON_DARK", "TEXT_ON_DARK_MUTED", "AI_ACCENT")
+_FG_KEYS = (
+    "TEXT", "TEXT_SECONDARY", "TEXT_MUTED", "TEXT_DISABLED",
+    "TEXT_ON_DARK", "TEXT_ON_DARK_MUTED", "SIDEBAR_TEXT_OFF",
+    "AI_ACCENT", "USER_ACCENT", "ON_ACCENT", "ON_ACCENT_MUTED",
+    "BADGE_FG",
+)
 
 
 def theme_color_map(source: str, target: str) -> dict:
@@ -288,12 +326,16 @@ def configure_styles(root: tk.Tk) -> ttk.Style:
         **common_button,
         borderwidth=0,
         background=Palette.ACCENT,
-        foreground="#FFFFFF",
+        foreground=Palette.ON_ACCENT,
     )
     style.map(
         "Primary.TButton",
-        background=[("pressed", Palette.ACCENT_PRESSED), ("active", Palette.ACCENT_HOVER), ("disabled", "#C7C5FF")],
-        foreground=[("disabled", "#F7F7FF")],
+        background=[
+            ("pressed", Palette.ACCENT_PRESSED),
+            ("active", Palette.ACCENT_HOVER),
+            ("disabled", Palette.ACCENT_DISABLED),
+        ],
+        foreground=[("disabled", Palette.ON_ACCENT_MUTED)],
     )
     style.configure(
         "Secondary.TButton",
@@ -384,22 +426,22 @@ def configure_styles(root: tk.Tk) -> ttk.Style:
     style.configure(
         "Modern.Vertical.TScrollbar",
         gripcount=0,
-        background=Palette.BORDER_STRONG,
-        troughcolor=Palette.SURFACE,
-        bordercolor=Palette.SURFACE,
-        lightcolor=Palette.BORDER_STRONG,
-        darkcolor=Palette.BORDER_STRONG,
+        background=Palette.SCROLLBAR,
+        troughcolor=Palette.SCROLLBAR_TROUGH,
+        bordercolor=Palette.SCROLLBAR_TROUGH,
+        lightcolor=Palette.SCROLLBAR,
+        darkcolor=Palette.SCROLLBAR,
         arrowsize=0,
         width=10,
     )
     style.configure(
         "Modern.Horizontal.TScrollbar",
         gripcount=0,
-        background=Palette.BORDER_STRONG,
-        troughcolor=Palette.SURFACE,
-        bordercolor=Palette.SURFACE,
-        lightcolor=Palette.BORDER_STRONG,
-        darkcolor=Palette.BORDER_STRONG,
+        background=Palette.SCROLLBAR,
+        troughcolor=Palette.SCROLLBAR_TROUGH,
+        bordercolor=Palette.SCROLLBAR_TROUGH,
+        lightcolor=Palette.SCROLLBAR,
+        darkcolor=Palette.SCROLLBAR,
         arrowsize=0,
         width=10,
     )

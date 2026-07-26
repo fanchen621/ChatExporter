@@ -11,9 +11,9 @@ import os
 from PIL import Image, ImageDraw
 
 BASE = 1024
-ACCENT_TOP = (99, 91, 255)      # #635BFF
-ACCENT_BOTTOM = (67, 56, 202)   # #4338CA
-WHITE = (255, 255, 255, 255)
+ACCENT_TOP = (217, 119, 87)     # #D97757 Claude 珊瑚
+ACCENT_BOTTOM = (156, 74, 47)   # #9C4A2F 深陶土
+WHITE = (250, 249, 245, 255)    # #FAF9F5 象牙，纯白在暖底上会发蓝
 
 
 def _rounded_gradient(size: int) -> Image.Image:

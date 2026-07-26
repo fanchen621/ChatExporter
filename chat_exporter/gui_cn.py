@@ -60,7 +60,7 @@ class ChatExporterGUI(ModernGUI):
             text="CE",
             width=3,
             bg=Palette.ACCENT,
-            fg="#FFFFFF",
+            fg=Palette.ON_ACCENT,
             font=(FONT_LATIN, 13, "bold"),
             relief=tk.FLAT,
             bd=0,
@@ -307,8 +307,8 @@ class ChatExporterGUI(ModernGUI):
         self.preview_source_badge = tk.Label(
             header,
             text="本地",
-            bg=Palette.SUCCESS_SOFT,
-            fg=Palette.SUCCESS,
+            bg=Palette.BADGE_BG,
+            fg=Palette.BADGE_FG,
             font=(FONT_UI, 8, "bold"),
             padx=9,
             pady=4,
@@ -448,7 +448,7 @@ class ChatExporterGUI(ModernGUI):
             text=self.APP_INITIALS.get(name, name[:2].upper()),
             width=3,
             bg=Palette.SIDEBAR_RAISED if available else Palette.SIDEBAR,
-            fg=accent if available else "#64748B",
+            fg=accent if available else Palette.SIDEBAR_TEXT_OFF,
             font=(FONT_LATIN, 9, "bold"),
             padx=4,
             pady=6,
@@ -463,7 +463,7 @@ class ChatExporterGUI(ModernGUI):
             text=display_name,
             anchor=tk.W,
             bg=Palette.SIDEBAR,
-            fg=Palette.TEXT_ON_DARK if available else "#64748B",
+            fg=Palette.TEXT_ON_DARK if available else Palette.SIDEBAR_TEXT_OFF,
             font=(FONT_UI, 9, "bold"),
         )
         title.pack(fill=tk.X)
@@ -472,11 +472,11 @@ class ChatExporterGUI(ModernGUI):
             text="可用" if available else "未检测到",
             anchor=tk.W,
             bg=Palette.SIDEBAR,
-            fg=Palette.TEXT_ON_DARK_MUTED if available else "#475569",
+            fg=Palette.TEXT_ON_DARK_MUTED if available else Palette.SIDEBAR_DOT_OFF,
             font=(FONT_UI, 8),
         )
         meta.pack(fill=tk.X, pady=(2, 0))
-        status = tk.Frame(body, width=7, height=7, bg=Palette.SUCCESS if available else "#475569")
+        status = tk.Frame(body, width=7, height=7, bg=Palette.SUCCESS if available else Palette.SIDEBAR_DOT_OFF)
         status.pack(side=tk.RIGHT, padx=(6, 1))
         status.pack_propagate(False)
 
@@ -948,7 +948,7 @@ class ChatExporterGUI(ModernGUI):
         card = tk.Frame(
             frame,
             bg=Palette.SUCCESS_SOFT,
-            highlightbackground="#ABEFC6",
+            highlightbackground=Palette.SUCCESS,
             highlightthickness=1,
             padx=14,
             pady=12,

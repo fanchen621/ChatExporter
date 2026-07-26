@@ -194,15 +194,15 @@ class ChatExporterGUI(BaseChineseGUI):
             gripcount=0,
             width=20,
             arrowsize=14,
-            background="#98A2B3",
-            troughcolor="#E4E7EC",
-            bordercolor="#D0D5DD",
-            lightcolor="#98A2B3",
-            darkcolor="#98A2B3",
+            background=Palette.SCROLLBAR,
+            troughcolor=Palette.SCROLLBAR_TROUGH,
+            bordercolor=Palette.BORDER,
+            lightcolor=Palette.SCROLLBAR,
+            darkcolor=Palette.SCROLLBAR,
         )
         self.style.map(
             "Wide.Vertical.TScrollbar",
-            background=[("active", "#667085"), ("pressed", "#475467")],
+            background=[("active", Palette.SCROLLBAR_ACTIVE), ("pressed", Palette.SCROLLBAR_ACTIVE)],
         )
 
     def _build_header(self, parent):
@@ -511,9 +511,9 @@ class ChatExporterGUI(BaseChineseGUI):
                 # 颜色取调色板——写死的浅灰在深色主题下会亮出一条
                 widget.configure(
                     width=22,
-                    bg=Palette.BORDER_STRONG,
-                    troughcolor=Palette.SURFACE_ALT,
-                    activebackground=Palette.TEXT_DISABLED,
+                    bg=Palette.SCROLLBAR,
+                    troughcolor=Palette.SCROLLBAR_TROUGH,
+                    activebackground=Palette.SCROLLBAR_ACTIVE,
                     highlightthickness=0,
                     relief=tk.FLAT,
                     bd=0,
@@ -837,9 +837,9 @@ class ChatExporterGUI(BaseChineseGUI):
             orient=tk.VERTICAL,
             command=canvas.yview,
             width=18,
-            bg="#98A2B3",
-            troughcolor="#E4E7EC",
-            activebackground="#667085",
+            bg=Palette.SCROLLBAR,
+            troughcolor=Palette.SCROLLBAR_TROUGH,
+            activebackground=Palette.SCROLLBAR_ACTIVE,
             relief=tk.FLAT,
             bd=0,
         )

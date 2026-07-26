@@ -98,31 +98,31 @@ class MarkdownFormatExporter(BaseExporter):
 _HTML_STYLE = """
 :root {
   color-scheme: light dark;
-  --bg: #f5f6f8;
+  --bg: #f0eee6;
   --card: #ffffff;
-  --fg: #1f2328;
-  --muted: #6b7280;
-  --line: #e2e6ea;
-  --user-bg: #eef3ff;
-  --user-accent: #3b6ef6;
+  --fg: #191919;
+  --muted: #6e6b62;
+  --line: #e5e2d9;
+  --user-bg: #faf9f5;
+  --user-accent: #78736a;
   --ai-bg: #ffffff;
-  --ai-accent: #12a37a;
-  --tool-bg: #f7f8fa;
-  --code-bg: #f1f3f6;
+  --ai-accent: #c96442;
+  --tool-bg: #faf9f5;
+  --code-bg: #f5f3ed;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #14161a;
-    --card: #1b1e24;
-    --fg: #e5e8ec;
-    --muted: #98a1ad;
-    --line: #2b3038;
-    --user-bg: #1b2634;
-    --user-accent: #5b93ff;
-    --ai-bg: #1b1e24;
-    --ai-accent: #35c99b;
-    --tool-bg: #20242b;
-    --code-bg: #23272f;
+    --bg: #1b1a18;
+    --card: #262624;
+    --fg: #f5f4ef;
+    --muted: #a19d93;
+    --line: #3a3936;
+    --user-bg: #30302e;
+    --user-accent: #a8a296;
+    --ai-bg: #262624;
+    --ai-accent: #e08a6b;
+    --tool-bg: #30302e;
+    --code-bg: #30302e;
   }
 }
 * { box-sizing: border-box; }
