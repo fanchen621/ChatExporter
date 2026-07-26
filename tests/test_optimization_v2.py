@@ -8,7 +8,12 @@ import unittest
 
 from chat_exporter.markdown_exporter import MarkdownExporter
 from chat_exporter.models import Conversation, Message, MessagePart, MessagePartType, Role
-from chat_exporter.preview_utils import message_preview_text, strip_internal_context, visible_messages
+from chat_exporter.preview_utils import (
+    PREVIEW_CLEAN,
+    message_preview_text,
+    strip_internal_context,
+    visible_messages,
+)
 
 
 class OverStrippingTests(unittest.TestCase):
@@ -138,51 +143,133 @@ class FallbackBodyTests(unittest.TestCase):
 
 
 class CleanPreviewModeTests(unittest.TestCase):
-    """“只看对话”开关：预览可以筛，导出必须完整。"""
+    """“只看对话”开关：预览可以筛，导出必须完整，且 AI 绝不能失声。
 
-    def _conv(self):
-        answer = Message(
-            role=Role.ASSISTANT,
-            parts=[
-                MessagePart(type=MessagePartType.THINKING, content="我先想想该怎么回答"),
-                MessagePart(type=MessagePartType.TOOL_RESULT, tool_output="工具跑出来的一堆日志"),
+    实测依据：TRAE 的 assistant 消息 67/67 全都没有 text part，回答整个存在
+    reasoning 里。把回退一刀切关掉会让 6/6 条 TRAE 对话在阅读视图里只剩
+    用户自己说话——所以"只看对话"是"只留结论"，不是"删掉 AI"。
+    """
+
+    def _trae_conv(self):
+        """TRAE 形态：assistant 完全没有 text part，多块推理 + 工具。"""
+        return Conversation(
+            id="c", title="t", source_app="TRAE SOLO CN",
+            messages=[
+                Message(role=Role.USER, content="帮我查一下"),
+                Message(role=Role.ASSISTANT, parts=[
+                    MessagePart(type=MessagePartType.THINKING, content="第一步我要先搜索"),
+                    MessagePart(type=MessagePartType.TOOL_CALL, tool_name="search"),
+                    MessagePart(type=MessagePartType.TOOL_RESULT, tool_output="一大堆原始结果"),
+                    MessagePart(type=MessagePartType.THINKING, content="综合来看，结论是这样的"),
+                ]),
             ],
         )
+
+    def _normal_conv(self):
+        """常规形态：AI 有真正的回答正文。"""
         return Conversation(
-            id="c",
-            title="t",
-            source_app="TRAE SOLO CN",
+            id="c", title="t", source_app="WorkBuddy",
             messages=[
                 Message(role=Role.USER, content="帮我看看"),
-                answer,
-                Message(role=Role.ASSISTANT, content="这是最终回答"),
+                Message(role=Role.ASSISTANT, parts=[
+                    MessagePart(type=MessagePartType.THINKING, content="我先想想该怎么回答"),
+                    MessagePart(type=MessagePartType.TEXT, content="这是最终回答"),
+                    MessagePart(type=MessagePartType.TOOL_RESULT, tool_output="工具日志"),
+                ]),
             ],
         )
 
-    def test_default_preview_falls_back_to_thinking(self):
-        visible = visible_messages(self._conv())
-        self.assertEqual(len(visible), 3)
-        self.assertTrue(any("我先想想" in text for _m, _r, text in visible))
+    def test_clean_mode_keeps_ai_voice_when_answer_lives_in_reasoning(self):
+        visible = visible_messages(self._trae_conv(), mode=PREVIEW_CLEAN)
+        roles = [role for _m, role, _t in visible]
+        self.assertIn(Role.ASSISTANT, roles, "AI 不能在只看对话模式里整个消失")
 
-    def test_clean_mode_hides_thinking_and_tool_only_messages(self):
-        visible = visible_messages(self._conv(), include_fallback=False)
-        self.assertEqual(len(visible), 2)
-        joined = "\n".join(text for _m, _r, text in visible)
-        self.assertNotIn("我先想想", joined)
-        self.assertNotIn("工具跑出来", joined)
-        self.assertIn("这是最终回答", joined)
+    def test_clean_mode_keeps_only_the_concluding_reasoning_block(self):
+        visible = visible_messages(self._trae_conv(), mode=PREVIEW_CLEAN)
+        ai_text = next(t for _m, r, t in visible if r == Role.ASSISTANT)
+        self.assertIn("结论是这样的", ai_text)
+        self.assertNotIn("第一步我要先搜索", ai_text)
+        self.assertNotIn("一大堆原始结果", ai_text)
+
+    def test_full_mode_still_keeps_every_reasoning_block(self):
+        visible = visible_messages(self._trae_conv())
+        ai_text = next(t for _m, r, t in visible if r == Role.ASSISTANT)
+        self.assertIn("第一步我要先搜索", ai_text)
+        self.assertIn("结论是这样的", ai_text)
+
+    def test_clean_mode_prefers_the_real_answer_over_reasoning(self):
+        visible = visible_messages(self._normal_conv(), mode=PREVIEW_CLEAN)
+        ai_text = next(t for _m, r, t in visible if r == Role.ASSISTANT)
+        self.assertIn("这是最终回答", ai_text)
+        self.assertNotIn("我先想想", ai_text)
+        self.assertNotIn("工具日志", ai_text)
+
+    def test_clean_mode_drops_pure_tool_records(self):
+        conv = Conversation(
+            id="c", title="t", source_app="QClaw",
+            messages=[
+                Message(role=Role.USER, content="问题"),
+                Message(role=Role.ASSISTANT, parts=[
+                    MessagePart(type=MessagePartType.TOOL_RESULT, tool_output="只有工具输出"),
+                ]),
+            ],
+        )
+        joined = "\n".join(t for _m, _r, t in visible_messages(conv, mode=PREVIEW_CLEAN))
+        self.assertNotIn("只有工具输出", joined)
+        self.assertIn("只有工具输出", MarkdownExporter().export(conv))
 
     def test_clean_mode_never_affects_export(self):
-        md = MarkdownExporter().export(self._conv())
-        self.assertIn("我先想想", md)
-        self.assertIn("工具跑出来", md)
-        self.assertIn("这是最终回答", md)
+        """预览筛掉的每一样东西，都必须还在导出文件里。"""
+        trae_md = MarkdownExporter().export(self._trae_conv())
+        for needle in ("第一步我要先搜索", "结论是这样的", "一大堆原始结果"):
+            self.assertIn(needle, trae_md)
+
+        normal_md = MarkdownExporter().export(self._normal_conv())
+        for needle in ("我先想想", "这是最终回答", "工具日志"):
+            self.assertIn(needle, normal_md)
 
     def test_plain_text_copy_follows_the_mode(self):
         from chat_exporter.preview_utils import plain_preview_text
 
-        self.assertIn("我先想想", plain_preview_text(self._conv()))
-        self.assertNotIn("我先想想", plain_preview_text(self._conv(), include_fallback=False))
+        self.assertIn("第一步我要先搜索", plain_preview_text(self._trae_conv()))
+        self.assertNotIn("第一步我要先搜索", plain_preview_text(self._trae_conv(), mode=PREVIEW_CLEAN))
+        self.assertIn("结论是这样的", plain_preview_text(self._trae_conv(), mode=PREVIEW_CLEAN))
+
+    def test_mode_resolution_adapts_to_the_conversation(self):
+        """判据是整段对话有没有真回答，而不是写死某个来源。"""
+        from chat_exporter.preview_utils import (
+            PREVIEW_CLEAN_CONCISE,
+            PREVIEW_CLEAN_STRICT,
+            resolve_preview_mode,
+        )
+
+        self.assertEqual(
+            resolve_preview_mode(self._trae_conv(), PREVIEW_CLEAN), PREVIEW_CLEAN_CONCISE
+        )
+        self.assertEqual(
+            resolve_preview_mode(self._normal_conv(), PREVIEW_CLEAN), PREVIEW_CLEAN_STRICT
+        )
+
+    def test_machinery_turn_is_hidden_when_the_ai_answers_elsewhere(self):
+        """AI 在别处给过真回答时，纯推理轮次属于机器动作，应整条隐藏。"""
+        conv = Conversation(
+            id="c", title="t", source_app="WorkBuddy",
+            messages=[
+                Message(role=Role.USER, content="问题"),
+                Message(role=Role.ASSISTANT, parts=[
+                    MessagePart(type=MessagePartType.THINKING, content="中间步骤的推理"),
+                    MessagePart(type=MessagePartType.TOOL_RESULT, tool_output="工具输出"),
+                ]),
+                Message(role=Role.ASSISTANT, parts=[
+                    MessagePart(type=MessagePartType.TEXT, content="真正的回答"),
+                ]),
+            ],
+        )
+        joined = "\n".join(t for _m, _r, t in visible_messages(conv, mode=PREVIEW_CLEAN))
+        self.assertIn("真正的回答", joined)
+        self.assertNotIn("中间步骤的推理", joined)
+        self.assertNotIn("工具输出", joined)
+        self.assertIn("中间步骤的推理", MarkdownExporter().export(conv))
 
 
 class PreviewSegmentTests(unittest.TestCase):

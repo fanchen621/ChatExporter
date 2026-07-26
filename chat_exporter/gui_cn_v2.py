@@ -9,7 +9,14 @@ from typing import Dict, List, Optional, Tuple
 
 from .gui_cn import ChatExporterGUI as BaseChineseGUI
 from .models import AppInfo, Conversation, Role
-from .preview_utils import conversation_search_text, message_preview_text, plain_preview_text, visible_messages
+from .preview_utils import (
+    PREVIEW_CLEAN,
+    PREVIEW_FULL,
+    conversation_search_text,
+    message_preview_text,
+    plain_preview_text,
+    visible_messages,
+)
 from .search_index import conversation_stamp
 from .ui_theme import FONT_LATIN, FONT_MONO, FONT_UI, Metrics, Palette
 
@@ -824,11 +831,11 @@ class ChatExporterGUI(BaseChineseGUI):
             return
         self.selected_conv = conv
         clean = self._clean_preview_enabled()
-        include_fallback = not clean
-        visible = visible_messages(conv, include_fallback=include_fallback)
+        mode = PREVIEW_CLEAN if clean else PREVIEW_FULL
+        visible = visible_messages(conv, mode=mode)
         full_count = len(visible_messages(conv)) if clean else len(visible)
         self._preview_visible_count = len(visible)
-        self._preview_plain_text = plain_preview_text(conv, include_fallback=include_fallback)
+        self._preview_plain_text = plain_preview_text(conv, mode=mode)
         self.preview_title_var.set(conv.title or "无标题对话")
         updated = conv.updated_at.strftime("%Y-%m-%d %H:%M") if conv.updated_at else "未知时间"
         meta = f"{conv.source_app} · 用户/AI 正文 {len(visible)} 条 · 更新于 {updated}"

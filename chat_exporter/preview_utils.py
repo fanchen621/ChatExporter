@@ -258,7 +258,18 @@ def _looks_like_thinking_placeholder(text: str, message: Message) -> bool:
     return has_thinking and any(pattern.search(text or "") for pattern in _THINKING_PLACEHOLDER_PATTERNS)
 
 
-def _fallback_visible_text(message: Message, source_app: str, role: Role) -> str:
+PREVIEW_FULL = "full"
+PREVIEW_CLEAN = "clean"
+# 「只看对话」的两种落法，由 visible_messages 按整段对话的形态自动选：
+#   strict —— 这段对话里 AI 有真正的回答正文，纯机器轮次整条不显示；
+#   concise —— AI 从头到尾没有回答正文（TRAE 就是这样），保留每轮最后一块
+#              推理当作它的结论，否则阅读视图里只剩用户自己在说话。
+PREVIEW_CLEAN_STRICT = "clean_strict"
+PREVIEW_CLEAN_CONCISE = "clean_concise"
+_CLEAN_MODES = (PREVIEW_CLEAN, PREVIEW_CLEAN_STRICT, PREVIEW_CLEAN_CONCISE)
+
+
+def _fallback_visible_text(message: Message, source_app: str, role: Role, mode: str = PREVIEW_FULL) -> str:
     """Readable fallback for messages whose final body is not a TEXT part."""
     if role != Role.ASSISTANT:
         return ""
@@ -268,7 +279,17 @@ def _fallback_visible_text(message: Message, source_app: str, role: Role) -> str
         for part in message.parts
         if _part_type(part) == MessagePartType.THINKING.value and _clean(part.content)
     ]
+    if mode == PREVIEW_CLEAN_STRICT:
+        # 这段对话里 AI 另有真正的回答，这一轮纯属机器动作，不进阅读视图。
+        return ""
+
     if thinking:
+        if mode == PREVIEW_CLEAN_CONCISE:
+            # 只留最后一块推理——它最接近这轮的结论。
+            # 实测 TRAE 的 assistant 消息 100% 没有 text part（67/67），
+            # 整块砍掉回退会让 AI 在阅读视图里彻底失声，只剩用户自己在说话。
+            return thinking[-1]
+
         if (source_app or "").casefold().startswith("trae"):
             # A TRAE task can split the final delivery across several plan_item
             # rows. Keep every block instead of stopping after the first one.
@@ -281,6 +302,10 @@ def _fallback_visible_text(message: Message, source_app: str, role: Role) -> str
                 summary = summary[:600] + "…"
             return f"[AI 思考摘要]\n{summary}"
 
+    if mode in _CLEAN_MODES:
+        # 纯工具记录属于"机器动作"，阅读视图里不该出现；导出仍然完整保留。
+        return ""
+
     for part in reversed(message.parts):
         if _part_type(part) != MessagePartType.TOOL_RESULT.value:
             continue
@@ -290,15 +315,18 @@ def _fallback_visible_text(message: Message, source_app: str, role: Role) -> str
     return ""
 
 
-def message_preview_text(message: Message, source_app: str = "", include_fallback: bool = True) -> str:
+def message_preview_text(message: Message, source_app: str = "", mode: str = PREVIEW_FULL) -> str:
     """提取适合阅读和全文检索的用户/AI正文。
 
-    正常回复只展示用户/AI正文、代码和附件。若客户端把最终交付仅存入
-    thinking 或 tool_result，则使用完整性回退，避免整条消息在预览中消失。
+    mode=PREVIEW_FULL（默认）：正文优先，正文为空时回退展示完整推理或工具结果，
+    保证任何一条消息都不会在预览里凭空消失。
 
-    include_fallback=False 就是"只看对话"模式：不做这层回退，思考和工具
-    结果一律不进阅读视图。代价是那些把最终交付只写进 thinking 的消息会
-    整条消失——所以它是一个显式开关，不是默认值。导出永远不受影响。
+    mode=PREVIEW_CLEAN（"只看对话"）：优先展示真正的回答正文；正文为空时只留
+    最后一块推理（最接近结论），纯工具记录不展示。不能简单地把回退整个关掉——
+    实测 TRAE 的 assistant 消息 100% 没有 text part，那样做会让 AI 彻底失声，
+    阅读视图里只剩用户自己在说话。
+
+    两种模式都只影响阅读视图，导出永远完整。
     """
 
     role = effective_role(message)
@@ -346,22 +374,45 @@ def message_preview_text(message: Message, source_app: str = "", include_fallbac
 
     # Attachments do not count as the answer body. A message containing only an
     # attachment plus reasoning/tool output still needs its actual delivery.
-    if not has_primary_body and include_fallback:
-        fallback = _fallback_visible_text(message, source_app, role)
+    if not has_primary_body:
+        fallback = _fallback_visible_text(message, source_app, role, mode=mode)
         if fallback:
             append(fallback)
 
     return "\n\n".join(chunks)
 
 
-def visible_messages(conversation: Conversation, include_fallback: bool = True) -> List[Tuple[Message, Role, str]]:
+def _has_answer_body(message: Message) -> bool:
+    """这条消息是否带真正的回答正文（而不是只有推理/工具记录）。"""
+    for part in message.parts:
+        part_type = _part_type(part)
+        if part_type in (MessagePartType.TEXT.value, MessagePartType.CODE.value) and _clean(part.content):
+            return True
+    return bool(not message.parts and _clean(message.content or ""))
+
+
+def resolve_preview_mode(conversation: Conversation, mode: str) -> str:
+    """把 PREVIEW_CLEAN 落实成 strict 还是 concise。
+
+    判据是整段对话：只要 AI 在任何一轮给过真正的回答正文，就说明这个客户端
+    会把交付写进 text，纯机器轮次可以放心整条隐藏；否则（TRAE 那种把回答全
+    存进 reasoning 的形态）必须保留结论，不然 AI 会在阅读视图里彻底失声。
+    """
+    if mode != PREVIEW_CLEAN:
+        return mode
+    for message in conversation.messages:
+        if effective_role(message) == Role.ASSISTANT and _has_answer_body(message):
+            return PREVIEW_CLEAN_STRICT
+    return PREVIEW_CLEAN_CONCISE
+
+
+def visible_messages(conversation: Conversation, mode: str = PREVIEW_FULL) -> List[Tuple[Message, Role, str]]:
     """返回 (message, effective_role, preview_text) 三元组，不修改原对象。"""
+    resolved = resolve_preview_mode(conversation, mode)
     result: List[Tuple[Message, Role, str]] = []
     for message in conversation.messages:
         role = effective_role(message)
-        text = message_preview_text(
-            message, source_app=conversation.source_app, include_fallback=include_fallback
-        )
+        text = message_preview_text(message, source_app=conversation.source_app, mode=resolved)
         if not text or role not in VISIBLE_ROLES:
             continue
         result.append((message, role, text))
@@ -376,10 +427,10 @@ def conversation_search_text(conversation: Conversation) -> str:
     return "\n".join(parts).casefold()
 
 
-def plain_preview_text(conversation: Conversation, include_fallback: bool = True) -> str:
+def plain_preview_text(conversation: Conversation, mode: str = PREVIEW_FULL) -> str:
     """生成可复制的用户/AI纯文本对话。"""
     blocks: List[str] = []
-    for message, role, text in visible_messages(conversation, include_fallback=include_fallback):
+    for message, role, text in visible_messages(conversation, mode=mode):
         role_label = "用户" if role == Role.USER else "AI 助手"
         timestamp = message.timestamp.strftime("%Y-%m-%d %H:%M:%S") if message.timestamp else ""
         header = role_label if not timestamp else f"{role_label} · {timestamp}"
