@@ -568,19 +568,42 @@ class ChatExporterGUI(BaseChineseGUI):
         )
         self.preview_source_badge.grid(row=0, column=1, sticky="e")
 
-        note = tk.Frame(parent, bg=Palette.INFO_SOFT, bd=0, padx=14, pady=9)
+        note = tk.Frame(parent, bg=Palette.INFO_SOFT, bd=0, padx=14, pady=8)
         note.grid(row=1, column=0, sticky="ew", padx=Metrics.CARD_PAD, pady=(0, 8))
-        note_label = tk.Label(
+        note.grid_columnconfigure(0, weight=1)
+
+        settings = getattr(self, "settings", None)
+        self.clean_preview_var = tk.BooleanVar(
+            value=bool(settings.get("clean_preview", False)) if settings is not None else False
+        )
+        tk.Checkbutton(
             note,
-            text="预览已精简：只展示用户和 AI 的完整可见正文。思考、工具调用和工具结果仍会保留在完整导出中。",
+            text="只看对话（隐藏思考与工具）",
+            variable=self.clean_preview_var,
+            command=self._on_clean_preview_toggled,
             bg=Palette.INFO_SOFT,
             fg=Palette.TEXT_SECONDARY,
-            font=(FONT_UI, 9),
+            activebackground=Palette.INFO_SOFT,
+            activeforeground=Palette.TEXT,
+            selectcolor=Palette.SURFACE,
+            font=(FONT_UI, 9, "bold"),
+            bd=0,
+            highlightthickness=0,
+            cursor="hand2",
+            anchor=tk.W,
+        ).grid(row=0, column=0, sticky="w")
+
+        note_label = tk.Label(
+            note,
+            text="导出始终完整：无论预览怎么筛，思考、工具调用与工具结果都会写进导出文件。",
+            bg=Palette.INFO_SOFT,
+            fg=Palette.TEXT_MUTED,
+            font=(FONT_UI, 8),
             anchor=tk.W,
             justify=tk.LEFT,
             wraplength=760,
         )
-        note_label.pack(fill=tk.X)
+        note_label.grid(row=1, column=0, sticky="ew", pady=(3, 0))
         # 折行宽度跟随实际宽度，窄分栏下不再挤出难看的两三字短行。
         note.bind("<Configure>", lambda e: note_label.configure(wraplength=max(240, e.width - 32)))
 
@@ -661,8 +684,24 @@ class ChatExporterGUI(BaseChineseGUI):
         self.preview_text.tag_configure("search_current", background="#FEC84B", foreground=Palette.TEXT)
         self._show_preview_placeholder()
 
-    @staticmethod
-    def _body_segments(text: str, body_tag: str):
+    _INLINE_CODE = re.compile(r"`([^`\n]+)`")
+
+    @classmethod
+    def _inline_segments(cls, text: str, body_tag: str):
+        """把 `反引号` 包起来的片段单独标成行内代码，其余按正文渲染。"""
+        segments = []
+        cursor = 0
+        for match in cls._INLINE_CODE.finditer(text):
+            if match.start() > cursor:
+                segments.append((text[cursor:match.start()], body_tag))
+            segments.append((match.group(1), "inline_code"))
+            cursor = match.end()
+        if cursor < len(text):
+            segments.append((text[cursor:], body_tag))
+        return segments or [(text, body_tag)]
+
+    @classmethod
+    def _body_segments(cls, text: str, body_tag: str):
         """把正文拆成普通段和 ``` 代码块段，代码块用等宽字体和浅底色渲染。
 
         奇数个围栏说明最后一个代码块没闭合（对话被截停是常态），
@@ -677,7 +716,8 @@ class ChatExporterGUI(BaseChineseGUI):
             if is_code:
                 segments.append((chunk.rstrip("\n") + "\n", "code_block"))
             else:
-                segments.append((chunk.strip("\n") + "\n", body_tag))
+                segments.extend(cls._inline_segments(chunk.strip("\n"), body_tag))
+                segments.append(("\n", body_tag))
         if not segments and text.strip():
             segments.append((text.strip("\n") + "\n", body_tag))
         return segments
@@ -691,6 +731,13 @@ class ChatExporterGUI(BaseChineseGUI):
         t.tag_configure("assistant_body", foreground=Palette.TEXT, lmargin1=22, lmargin2=22, rmargin=22, spacing2=2, spacing3=10)
         t.tag_configure("header_meta", font=(FONT_UI, 8), foreground=Palette.TEXT_MUTED)
         t.tag_configure("message_gap", font=(FONT_UI, 4), spacing1=6, spacing3=6)
+        t.tag_configure(
+            "inline_code",
+            font=(FONT_MONO, 9),
+            background=Palette.CODE_BG,
+            foreground=Palette.ACCENT_PRESSED,
+        )
+        t.tag_configure("hint_body", font=(FONT_UI, 9), foreground=Palette.TEXT_MUTED, lmargin1=22, lmargin2=22)
         t.tag_configure(
             "code_block",
             font=(FONT_MONO, 9),
@@ -760,27 +807,53 @@ class ChatExporterGUI(BaseChineseGUI):
 
         threading.Thread(target=worker, daemon=True, name="preview-load").start()
 
+    def _clean_preview_enabled(self) -> bool:
+        var = getattr(self, "clean_preview_var", None)
+        return bool(var.get()) if var is not None else False
+
+    def _on_clean_preview_toggled(self):
+        if getattr(self, "settings", None) is not None:
+            self.settings.set("clean_preview", self._clean_preview_enabled())
+        if self.selected_conv is not None:
+            # 重渲当前对话即可，不必重新读盘。
+            self._preview_generation += 1
+            self._show_preview("", self.selected_conv, self._preview_generation)
+
     def _show_preview(self, _markdown: str, conv: Conversation, generation: int):
         if generation != self._preview_generation:
             return
         self.selected_conv = conv
-        visible = visible_messages(conv)
+        clean = self._clean_preview_enabled()
+        include_fallback = not clean
+        visible = visible_messages(conv, include_fallback=include_fallback)
+        full_count = len(visible_messages(conv)) if clean else len(visible)
         self._preview_visible_count = len(visible)
-        self._preview_plain_text = plain_preview_text(conv)
+        self._preview_plain_text = plain_preview_text(conv, include_fallback=include_fallback)
         self.preview_title_var.set(conv.title or "无标题对话")
         updated = conv.updated_at.strftime("%Y-%m-%d %H:%M") if conv.updated_at else "未知时间"
-        self.preview_meta_var.set(
-            f"{conv.source_app} · 用户/AI 正文 {len(visible)} 条 · 更新于 {updated}"
-        )
+        meta = f"{conv.source_app} · 用户/AI 正文 {len(visible)} 条 · 更新于 {updated}"
+        hidden = full_count - len(visible)
+        if clean and hidden > 0:
+            # 明说藏了多少条，否则"只看对话"会让人以为对话本身就这么短。
+            meta += f" · 已隐藏 {hidden} 条仅含思考/工具的消息"
+        self.preview_meta_var.set(meta)
 
         # 全量渲染 + 后台分批插入：无论会话多大，尾部都不会被截断，界面也不会卡死。
         segments = []
         if not visible:
-            segments.append((
-                "\n\n这条记录没有可显示的用户/AI 正文\n\n"
-                "工具记录、系统消息和思考过程仍会保留在完整导出中。\n",
-                "empty_body",
-            ))
+            if clean and full_count:
+                segments.append((
+                    f"\n\n“只看对话”已隐藏这条记录的全部 {full_count} 条消息\n\n"
+                    "这条对话里，AI 的最终交付只存在于思考或工具结果中。"
+                    "取消勾选即可看到它们；导出文件本来就是完整的。\n",
+                    "empty_body",
+                ))
+            else:
+                segments.append((
+                    "\n\n这条记录没有可显示的用户/AI 正文\n\n"
+                    "工具记录、系统消息和思考过程仍会保留在完整导出中。\n",
+                    "empty_body",
+                ))
         else:
             for index, (message, eff_role, text) in enumerate(visible):
                 role_name = "用户" if eff_role == Role.USER else "AI 助手"

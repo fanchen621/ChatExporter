@@ -4,6 +4,7 @@ import os
 import ctypes
 import threading
 import tkinter as tk
+from datetime import datetime, timedelta
 from tkinter import filedialog, messagebox, ttk
 
 from .adapters.qclaw_compat import QClawAdapter as QClawCompatAdapter
@@ -49,6 +50,16 @@ class ChatExporterGUI(BaseChineseGUI):
     """v1.1.3：面向高 DPI 真机的自适应中文工作台。"""
 
     SIDEBAR_WIDTH = 304
+
+    DATE_FILTER_ALL = "全部时间"
+    DATE_FILTERS = (
+        (DATE_FILTER_ALL, None),
+        ("今天", 0),
+        ("近 7 天", 7),
+        ("近 30 天", 30),
+        ("近 90 天", 90),
+        ("近一年", 365),
+    )
 
     def __init__(self):
         # 主题必须在任何控件被创建之前定下来：界面代码是在构建时直接读 Palette 的。
@@ -362,20 +373,37 @@ class ChatExporterGUI(BaseChineseGUI):
         sort_box.grid(row=0, column=2, sticky="e")
         sort_box.bind("<<ComboboxSelected>>", lambda _e: self._filter_conversations())
 
+        # 范围和时间两个下拉各占一半宽度：窄分栏下也不会把右边那个挤出可视区。
         mode_row = ttk.Frame(parent, style="Surface.TFrame")
         mode_row.grid(row=1, column=0, sticky="ew", padx=Metrics.CARD_PAD, pady=(0, 6))
-        ttk.Label(mode_row, text="检索范围", style="Muted.TLabel").pack(side=tk.LEFT)
+        mode_row.grid_columnconfigure(1, weight=1, uniform="filters")
+        mode_row.grid_columnconfigure(3, weight=1, uniform="filters")
+
+        ttk.Label(mode_row, text="范围", style="Muted.TLabel").grid(row=0, column=0, sticky="w")
         self.search_mode_var = tk.StringVar(value=self.SEARCH_MODE_TITLE)
         mode_box = ttk.Combobox(
             mode_row,
             textvariable=self.search_mode_var,
             values=(self.SEARCH_MODE_TITLE, self.SEARCH_MODE_CONTENT),
             state="readonly",
-            width=10,
+            width=7,
             font=(FONT_UI, 9),
         )
-        mode_box.pack(side=tk.LEFT, padx=(8, 0))
+        mode_box.grid(row=0, column=1, sticky="ew", padx=(6, 12))
         mode_box.bind("<<ComboboxSelected>>", self._on_search_mode_changed)
+
+        ttk.Label(mode_row, text="时间", style="Muted.TLabel").grid(row=0, column=2, sticky="w")
+        self.date_filter_var = tk.StringVar(value=self.DATE_FILTER_ALL)
+        date_box = ttk.Combobox(
+            mode_row,
+            textvariable=self.date_filter_var,
+            values=tuple(label for label, _days in self.DATE_FILTERS),
+            state="readonly",
+            width=7,
+            font=(FONT_UI, 9),
+        )
+        date_box.grid(row=0, column=3, sticky="ew", padx=(6, 0))
+        date_box.bind("<<ComboboxSelected>>", lambda _e: self._filter_conversations())
 
         search_row = tk.Frame(parent, bg=Palette.SURFACE, bd=0)
         search_row.grid(row=2, column=0, sticky="ew", padx=Metrics.CARD_PAD, pady=(0, 5))
@@ -497,6 +525,37 @@ class ChatExporterGUI(BaseChineseGUI):
         self.preview_text.bind("<MouseWheel>", wheel)
 
     # ========== 多格式导出 ==========
+
+    # ========== 时间范围筛选 ==========
+
+    def _date_cutoff(self):
+        """选中范围的起始时刻；"全部时间"返回 None。"""
+        label = self.date_filter_var.get() if getattr(self, "date_filter_var", None) else self.DATE_FILTER_ALL
+        days = next((d for text, d in self.DATE_FILTERS if text == label), None)
+        if days is None:
+            return None
+        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        return today if days == 0 else today - timedelta(days=days)
+
+    def _passes_date_filter(self, conv) -> bool:
+        cutoff = self._date_cutoff()
+        if cutoff is None:
+            return True
+        stamp = conv.updated_at or conv.created_at
+        # 没有时间戳的对话不因为筛选而消失：宁可多显示，也不要让人以为它没了。
+        return True if stamp is None else stamp >= cutoff
+
+    def _apply_date_filter(self, matches):
+        if self._date_cutoff() is None:
+            return matches
+        return [pair for pair in matches if self._passes_date_filter(pair[1])]
+
+    def _sort_matches(self, matches):
+        return super()._sort_matches(self._apply_date_filter(matches))
+
+    def _render_matches(self, matches, query: bool):
+        # 时间筛选也算"筛过"：否则计数会显示总数，看着像筛选没生效。
+        super()._render_matches(matches, query=query or self._date_cutoff() is not None)
 
     def _multi_selected_conversations(self):
         """列表里 Ctrl/Shift 选中的对话（少于两条时返回空，走原来的全量批量导出）。"""

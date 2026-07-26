@@ -8,7 +8,7 @@ import unittest
 
 from chat_exporter.markdown_exporter import MarkdownExporter
 from chat_exporter.models import Conversation, Message, MessagePart, MessagePartType, Role
-from chat_exporter.preview_utils import message_preview_text, strip_internal_context
+from chat_exporter.preview_utils import message_preview_text, strip_internal_context, visible_messages
 
 
 class OverStrippingTests(unittest.TestCase):
@@ -135,6 +135,92 @@ class FallbackBodyTests(unittest.TestCase):
         md = MarkdownExporter().export(conv)
         self.assertIn("这才是最终交付内容", md)
         self.assertTrue(message_preview_text(msg, source_app="TRAE SOLO CN"))
+
+
+class CleanPreviewModeTests(unittest.TestCase):
+    """“只看对话”开关：预览可以筛，导出必须完整。"""
+
+    def _conv(self):
+        answer = Message(
+            role=Role.ASSISTANT,
+            parts=[
+                MessagePart(type=MessagePartType.THINKING, content="我先想想该怎么回答"),
+                MessagePart(type=MessagePartType.TOOL_RESULT, tool_output="工具跑出来的一堆日志"),
+            ],
+        )
+        return Conversation(
+            id="c",
+            title="t",
+            source_app="TRAE SOLO CN",
+            messages=[
+                Message(role=Role.USER, content="帮我看看"),
+                answer,
+                Message(role=Role.ASSISTANT, content="这是最终回答"),
+            ],
+        )
+
+    def test_default_preview_falls_back_to_thinking(self):
+        visible = visible_messages(self._conv())
+        self.assertEqual(len(visible), 3)
+        self.assertTrue(any("我先想想" in text for _m, _r, text in visible))
+
+    def test_clean_mode_hides_thinking_and_tool_only_messages(self):
+        visible = visible_messages(self._conv(), include_fallback=False)
+        self.assertEqual(len(visible), 2)
+        joined = "\n".join(text for _m, _r, text in visible)
+        self.assertNotIn("我先想想", joined)
+        self.assertNotIn("工具跑出来", joined)
+        self.assertIn("这是最终回答", joined)
+
+    def test_clean_mode_never_affects_export(self):
+        md = MarkdownExporter().export(self._conv())
+        self.assertIn("我先想想", md)
+        self.assertIn("工具跑出来", md)
+        self.assertIn("这是最终回答", md)
+
+    def test_plain_text_copy_follows_the_mode(self):
+        from chat_exporter.preview_utils import plain_preview_text
+
+        self.assertIn("我先想想", plain_preview_text(self._conv()))
+        self.assertNotIn("我先想想", plain_preview_text(self._conv(), include_fallback=False))
+
+
+class PreviewSegmentTests(unittest.TestCase):
+    """预览渲染分段：行内代码与围栏代码块。"""
+
+    @staticmethod
+    def _segments(text, tag="assistant_body"):
+        from chat_exporter.gui_cn_v2 import ChatExporterGUI
+
+        return ChatExporterGUI._body_segments(text, tag)
+
+    def test_inline_code_gets_its_own_tag(self):
+        segs = self._segments("运行 `pip install -r requirements.txt` 就行")
+        tags = [tag for _text, tag in segs]
+        self.assertIn("inline_code", tags)
+        code = [t for t, tag in segs if tag == "inline_code"]
+        self.assertEqual(code, ["pip install -r requirements.txt"])
+
+    def test_inline_code_does_not_lose_surrounding_text(self):
+        segs = self._segments("先 `a` 再 `b` 最后收尾")
+        joined = "".join(text for text, _tag in segs)
+        self.assertIn("先 ", joined)
+        self.assertIn("再 ", joined)
+        self.assertIn("最后收尾", joined)
+        self.assertEqual(joined.count("`"), 0)
+
+    def test_fenced_block_is_tagged_as_code_block(self):
+        segs = self._segments("看这段：\n```python\nprint(1)\n```\n完事")
+        self.assertIn("code_block", [tag for _t, tag in segs])
+        block = [t for t, tag in segs if tag == "code_block"]
+        self.assertTrue(any("print(1)" in b for b in block))
+
+    def test_unclosed_fence_still_keeps_all_text(self):
+        segs = self._segments("开头\n```python\nprint(1)\n没闭合就断了")
+        joined = "".join(text for text, _tag in segs)
+        self.assertIn("开头", joined)
+        self.assertIn("print(1)", joined)
+        self.assertIn("没闭合就断了", joined)
 
 
 if __name__ == "__main__":

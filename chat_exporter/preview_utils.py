@@ -290,11 +290,15 @@ def _fallback_visible_text(message: Message, source_app: str, role: Role) -> str
     return ""
 
 
-def message_preview_text(message: Message, source_app: str = "") -> str:
+def message_preview_text(message: Message, source_app: str = "", include_fallback: bool = True) -> str:
     """提取适合阅读和全文检索的用户/AI正文。
 
     正常回复只展示用户/AI正文、代码和附件。若客户端把最终交付仅存入
     thinking 或 tool_result，则使用完整性回退，避免整条消息在预览中消失。
+
+    include_fallback=False 就是"只看对话"模式：不做这层回退，思考和工具
+    结果一律不进阅读视图。代价是那些把最终交付只写进 thinking 的消息会
+    整条消失——所以它是一个显式开关，不是默认值。导出永远不受影响。
     """
 
     role = effective_role(message)
@@ -342,7 +346,7 @@ def message_preview_text(message: Message, source_app: str = "") -> str:
 
     # Attachments do not count as the answer body. A message containing only an
     # attachment plus reasoning/tool output still needs its actual delivery.
-    if not has_primary_body:
+    if not has_primary_body and include_fallback:
         fallback = _fallback_visible_text(message, source_app, role)
         if fallback:
             append(fallback)
@@ -350,12 +354,14 @@ def message_preview_text(message: Message, source_app: str = "") -> str:
     return "\n\n".join(chunks)
 
 
-def visible_messages(conversation: Conversation) -> List[Tuple[Message, Role, str]]:
+def visible_messages(conversation: Conversation, include_fallback: bool = True) -> List[Tuple[Message, Role, str]]:
     """返回 (message, effective_role, preview_text) 三元组，不修改原对象。"""
     result: List[Tuple[Message, Role, str]] = []
     for message in conversation.messages:
         role = effective_role(message)
-        text = message_preview_text(message, source_app=conversation.source_app)
+        text = message_preview_text(
+            message, source_app=conversation.source_app, include_fallback=include_fallback
+        )
         if not text or role not in VISIBLE_ROLES:
             continue
         result.append((message, role, text))
@@ -370,10 +376,10 @@ def conversation_search_text(conversation: Conversation) -> str:
     return "\n".join(parts).casefold()
 
 
-def plain_preview_text(conversation: Conversation) -> str:
+def plain_preview_text(conversation: Conversation, include_fallback: bool = True) -> str:
     """生成可复制的用户/AI纯文本对话。"""
     blocks: List[str] = []
-    for message, role, text in visible_messages(conversation):
+    for message, role, text in visible_messages(conversation, include_fallback=include_fallback):
         role_label = "用户" if role == Role.USER else "AI 助手"
         timestamp = message.timestamp.strftime("%Y-%m-%d %H:%M:%S") if message.timestamp else ""
         header = role_label if not timestamp else f"{role_label} · {timestamp}"
