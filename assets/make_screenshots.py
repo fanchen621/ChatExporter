@@ -33,13 +33,24 @@ def _demo_conversations():
         )
 
     answer = (
+        "## 根因\n\n"
         "问题出在缓存键上：它只用了 `user_id`，没有把 `locale` 算进去，"
         "所以切换语言后仍然命中上一份缓存。\n\n"
         "```python\n"
         "def cache_key(user_id: str, locale: str) -> str:\n"
         "    return f\"profile:{user_id}:{locale}\"\n"
         "```\n\n"
-        "改完之后记得清一次线上旧键，否则老数据还会再撑一个 TTL。"
+        "### 修复步骤\n\n"
+        "1. 把 `locale` 并入缓存键（上面的实现）\n"
+        "2. 上线后**按前缀批量清一次旧键**，否则老数据还会再撑一个 TTL\n"
+        "3. 在集成测试里补一个双语言切换的用例\n\n"
+        "> 注意：清键放在低峰期做，瞬时回源压力可以降一个数量级。\n\n"
+        "| 方案 | 改动量 | 风险 |\n"
+        "|---|---|---|\n"
+        "| 键里并入 locale | 一行 | 低 |\n"
+        "| 切语言时主动失效 | 中 | 中 |\n\n"
+        "---\n\n"
+        "细节可以参考 [缓存设计准则](https://example.com/cache-rules)。"
     )
 
     return [

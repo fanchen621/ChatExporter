@@ -219,13 +219,35 @@ class QClawAdapter(BaseAdapter):
             if ptype == "text":
                 if txt:
                     parts.append(MessagePart(type=MessagePartType.TEXT, content=txt))
-            elif ptype == "tool_call":
-                parts.append(MessagePart(
-                    type=MessagePartType.TOOL_CALL,
-                    tool_name=prow["tool_name"],
-                    tool_input=prow["tool_input"] or txt or "",
-                    content=txt
-                ))
+            elif ptype in ("tool_call", "tool"):
+                # 实测本机库里调用行的 part_type 是 'tool'（14k+ 行）而不是
+                # 'tool_call'——旧代码把它们全落进 else 分支静默丢弃，
+                # 工具调用连同输入参数整个不进导出。两种拼法都接。
+                if prow["tool_input"]:
+                    parts.append(MessagePart(
+                        type=MessagePartType.TOOL_CALL,
+                        tool_name=prow["tool_name"],
+                        tool_input=prow["tool_input"],
+                        content=txt
+                    ))
+                elif txt:
+                    # tool_input 为空、只有 text_content 的 'tool' 行（实测 42 条，
+                    # 全挂在 role=tool 消息上，内容是结果占位文本）是结果不是调用，
+                    # 标成 TOOL_CALL 会把输出当"调用输入"展示。
+                    parts.append(MessagePart(
+                        type=MessagePartType.TOOL_RESULT,
+                        tool_name=prow["tool_name"],
+                        tool_output=txt,
+                        content=txt
+                    ))
+                combined_output = prow["tool_output"] or prow["tool_error"] or ""
+                if combined_output:
+                    parts.append(MessagePart(
+                        type=MessagePartType.TOOL_RESULT,
+                        tool_name=prow["tool_name"],
+                        tool_output=combined_output,
+                        content=combined_output
+                    ))
             elif ptype == "tool_result":
                 output = prow["tool_output"] or prow["tool_error"] or txt or ""
                 parts.append(MessagePart(
@@ -242,6 +264,10 @@ class QClawAdapter(BaseAdapter):
                 ))
             elif ptype in ("thinking", "reasoning"):
                 parts.append(MessagePart(type=MessagePartType.THINKING, content=txt))
+            # 注意：不要把 'compaction'（压缩摘要，挂在 role=system 上）映射成
+            # THINKING——SYSTEM+THINKING 会被 effective_role 提升为 ASSISTANT，
+            # 实测 60 条压缩日志以"AI 助手"身份混进阅读视图。走 else 保持 TEXT，
+            # system 消息在预览里天然隐藏，content 列的原文一个字不丢。
             elif ptype == "code":
                 parts.append(MessagePart(type=MessagePartType.CODE, content=txt))
             else:
@@ -249,13 +275,24 @@ class QClawAdapter(BaseAdapter):
                     parts.append(MessagePart(type=MessagePartType.TEXT, content=txt))
 
         # content 统一为 parts 中 TEXT parts 的换行连接。
-        # 若 parts 中没有 TEXT part 但数据库 content 有值，则用 content 补一个 TEXT part。
+        # 若 parts 中没有 TEXT part 但数据库 content 有值，则用 content 补齐。
+        # 实测 420 行 content 存的是内容块 JSON 数组（[{"type":"thinking",...}]），
+        # 直接回填成 TEXT 会让原始 JSON 裸奔进预览——先尝试展开成结构化 part。
         text_parts = [p.content for p in parts if p.type == MessagePartType.TEXT and p.content]
         if text_parts:
             content = "\n".join(text_parts)
         elif db_content:
-            parts.insert(0, MessagePart(type=MessagePartType.TEXT, content=db_content))
-            content = db_content
+            expanded = self._expand_content_blocks(db_content)
+            if expanded is not None:
+                parts.extend(expanded)
+                expanded_text = [
+                    p.content for p in expanded
+                    if p.type == MessagePartType.TEXT and p.content
+                ]
+                content = "\n".join(expanded_text)
+            else:
+                parts.insert(0, MessagePart(type=MessagePartType.TEXT, content=db_content))
+                content = db_content
         else:
             content = ""
 
@@ -267,6 +304,58 @@ class QClawAdapter(BaseAdapter):
             parts=parts,
             token_usage={"total_tokens": msg_row["token_count"]} if msg_row["token_count"] else None
         )
+
+    @staticmethod
+    def _expand_content_blocks(raw: str):
+        """把内容块 JSON 数组展开成结构化 part；解析不动就返回 None 原样回退。
+
+        实测块形态：thinking（字段 thinking）、toolCall（name/arguments）、
+        text（字段 text）。遇到未知块类型整体放弃展开——宁可显示原始 JSON
+        也不静默丢块。
+        """
+        if not raw or not raw.lstrip().startswith("[{"):
+            return None
+        try:
+            blocks = json.loads(raw)
+        except ValueError:
+            return None
+        if not isinstance(blocks, list):
+            return None
+        parts = []
+        for block in blocks:
+            if not isinstance(block, dict):
+                return None
+            btype = str(block.get("type") or "").lower()
+            if btype == "text":
+                value = block.get("text") or ""
+                if value:
+                    parts.append(MessagePart(type=MessagePartType.TEXT, content=value))
+            elif btype in ("thinking", "reasoning"):
+                value = block.get("thinking") or block.get("text") or ""
+                if value:
+                    parts.append(MessagePart(type=MessagePartType.THINKING, content=value))
+            elif btype in ("toolcall", "tool_use", "tool_call"):
+                arguments = block.get("arguments") if block.get("arguments") is not None else block.get("input")
+                parts.append(MessagePart(
+                    type=MessagePartType.TOOL_CALL,
+                    tool_name=str(block.get("name") or "") or None,
+                    tool_input=arguments if isinstance(arguments, str)
+                    else json.dumps(arguments, ensure_ascii=False) if arguments is not None else "",
+                ))
+            elif btype in ("toolresult", "tool_result"):
+                value = block.get("content")
+                text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+                parts.append(MessagePart(
+                    type=MessagePartType.TOOL_RESULT,
+                    tool_name=str(block.get("name") or "") or None,
+                    tool_output=text,
+                    content=text,
+                ))
+            else:
+                return None
+        # 空列表 ≠ 解析失败：[{"type":"text","text":""}] 是合法的空消息，
+        # 返回 None 会让原始 JSON 裸奔回预览。
+        return parts
 
     @staticmethod
     def _parse_role(role_str: str) -> Role:

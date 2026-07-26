@@ -466,10 +466,12 @@ class ChatExporterGUI(BaseChineseGUI):
         self.conv_tree.heading("title", text="标题")
         self.conv_tree.heading("date", text="更新时间")
         self.conv_tree.heading("messages", text="消息")
-        self.conv_tree.column("title", width=410, minwidth=280)
-        self.conv_tree.column("date", width=170, minwidth=145, stretch=False, anchor=tk.W)
-        self.conv_tree.column("messages", width=70, minwidth=64, stretch=False, anchor=tk.CENTER)
+        self.conv_tree.column("title", width=410, minwidth=190)
+        self.conv_tree.column("date", width=132, minwidth=120, stretch=False, anchor=tk.W)
+        self.conv_tree.column("messages", width=66, minwidth=60, stretch=False, anchor=tk.CENTER)
         self.conv_tree.grid(row=0, column=0, sticky="nsew")
+        # 写死列宽在某个分栏宽度下必然溢出截字；标题列跟随实际宽度伸缩（实现在 v2）
+        self.conv_tree.bind("<Configure>", self._fit_tree_columns, add="+")
 
         scroll = ttk.Scrollbar(
             tree_wrap,
@@ -506,11 +508,12 @@ class ChatExporterGUI(BaseChineseGUI):
         # v1.1.2 的预览使用 classic Tk scrollbar；显式设置为不透明、易拖动。
         for widget in self._walk_widgets(parent):
             if isinstance(widget, tk.Scrollbar):
+                # 颜色取调色板——写死的浅灰在深色主题下会亮出一条
                 widget.configure(
                     width=22,
-                    bg="#98A2B3",
-                    troughcolor="#E4E7EC",
-                    activebackground="#667085",
+                    bg=Palette.BORDER_STRONG,
+                    troughcolor=Palette.SURFACE_ALT,
+                    activebackground=Palette.TEXT_DISABLED,
                     highlightthickness=0,
                     relief=tk.FLAT,
                     bd=0,

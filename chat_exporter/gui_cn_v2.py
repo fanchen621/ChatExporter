@@ -358,10 +358,12 @@ class ChatExporterGUI(BaseChineseGUI):
         self.conv_tree.heading("title", text="标题")
         self.conv_tree.heading("date", text="更新时间")
         self.conv_tree.heading("messages", text="消息")
-        self.conv_tree.column("title", width=305, minwidth=230)
-        self.conv_tree.column("date", width=145, minwidth=130, stretch=False, anchor=tk.W)
-        self.conv_tree.column("messages", width=64, minwidth=58, stretch=False, anchor=tk.CENTER)
+        self.conv_tree.column("title", width=305, minwidth=190)
+        self.conv_tree.column("date", width=132, minwidth=120, stretch=False, anchor=tk.W)
+        self.conv_tree.column("messages", width=66, minwidth=60, stretch=False, anchor=tk.CENTER)
         self.conv_tree.grid(row=0, column=0, sticky="nsew")
+        # 固定列宽在某个分栏宽度下必然溢出截字；标题列跟随实际宽度伸缩
+        self.conv_tree.bind("<Configure>", self._fit_tree_columns, add="+")
 
         scroll = ttk.Scrollbar(
             tree_wrap,
@@ -575,8 +577,9 @@ class ChatExporterGUI(BaseChineseGUI):
         )
         self.preview_source_badge.grid(row=0, column=1, sticky="e")
 
-        note = tk.Frame(parent, bg=Palette.INFO_SOFT, bd=0, padx=14, pady=8)
-        note.grid(row=1, column=0, sticky="ew", padx=Metrics.CARD_PAD, pady=(0, 8))
+        # 开关行不加底色块：大面积色块是阅读噪声，一行灰字说明足够
+        note = tk.Frame(parent, bg=Palette.SURFACE, bd=0)
+        note.grid(row=1, column=0, sticky="ew", padx=Metrics.CARD_PAD, pady=(0, 4))
         note.grid_columnconfigure(0, weight=1)
 
         settings = getattr(self, "settings", None)
@@ -588,9 +591,9 @@ class ChatExporterGUI(BaseChineseGUI):
             text="只看对话（隐藏思考与工具）",
             variable=self.clean_preview_var,
             command=self._on_clean_preview_toggled,
-            bg=Palette.INFO_SOFT,
+            bg=Palette.SURFACE,
             fg=Palette.TEXT_SECONDARY,
-            activebackground=Palette.INFO_SOFT,
+            activebackground=Palette.SURFACE,
             activeforeground=Palette.TEXT,
             selectcolor=Palette.SURFACE,
             font=(FONT_UI, 9, "bold"),
@@ -602,17 +605,17 @@ class ChatExporterGUI(BaseChineseGUI):
 
         note_label = tk.Label(
             note,
-            text="导出始终完整：无论预览怎么筛，思考、工具调用与工具结果都会写进导出文件。",
-            bg=Palette.INFO_SOFT,
-            fg=Palette.TEXT_MUTED,
+            text="预览按平台前端的渲染结果展示；导出文件始终完整。",
+            bg=Palette.SURFACE,
+            fg=Palette.TEXT_DISABLED,
             font=(FONT_UI, 8),
             anchor=tk.W,
             justify=tk.LEFT,
             wraplength=760,
         )
-        note_label.grid(row=1, column=0, sticky="ew", pady=(3, 0))
+        note_label.grid(row=1, column=0, sticky="ew", padx=(24, 0))
         # 折行宽度跟随实际宽度，窄分栏下不再挤出难看的两三字短行。
-        note.bind("<Configure>", lambda e: note_label.configure(wraplength=max(240, e.width - 32)))
+        note.bind("<Configure>", lambda e: note_label.configure(wraplength=max(240, e.width - 48)))
 
         toolbar = tk.Frame(parent, bg=Palette.SURFACE, bd=0)
         toolbar.grid(row=2, column=0, sticky="ew", padx=Metrics.CARD_PAD, pady=(0, 8))
@@ -626,7 +629,7 @@ class ChatExporterGUI(BaseChineseGUI):
             pady=1,
         )
         find_wrap.grid(row=0, column=0, sticky="ew", padx=(0, 8))
-        tk.Label(find_wrap, text="对话内查找", bg=Palette.SURFACE_ALT, fg=Palette.TEXT_MUTED, font=(FONT_UI, 8, "bold")).pack(side=tk.LEFT, padx=(0, 8))
+        tk.Label(find_wrap, text="查找", bg=Palette.SURFACE_ALT, fg=Palette.TEXT_MUTED, font=(FONT_UI, 8, "bold")).pack(side=tk.LEFT, padx=(0, 8))
         self.preview_find_var = tk.StringVar(value="")
         preview_find_entry = tk.Entry(
             find_wrap,
@@ -645,11 +648,14 @@ class ChatExporterGUI(BaseChineseGUI):
         self.preview_find_count_var = tk.StringVar(value="")
         tk.Label(find_wrap, textvariable=self.preview_find_count_var, bg=Palette.SURFACE_ALT, fg=Palette.TEXT_MUTED, font=(FONT_UI, 8)).pack(side=tk.RIGHT, padx=(8, 0))
 
-        ttk.Button(toolbar, text="上一处", style="Ghost.TButton", command=lambda: self._goto_preview_hit(-1)).grid(row=0, column=1, padx=(0, 4))
-        ttk.Button(toolbar, text="下一处", style="Ghost.TButton", command=lambda: self._goto_preview_hit(1)).grid(row=0, column=2, padx=(0, 8))
-        ttk.Button(toolbar, text="复制正文", style="Secondary.TButton", command=self._copy_preview_text).grid(row=0, column=3, padx=(0, 4))
-        ttk.Button(toolbar, text="顶部", style="Ghost.TButton", command=lambda: self.preview_text.see("1.0")).grid(row=0, column=4, padx=(0, 4))
-        ttk.Button(toolbar, text="底部", style="Ghost.TButton", command=lambda: self.preview_text.see(tk.END)).grid(row=0, column=5)
+        # 高 DPI 下 ttk 按钮的自然宽度很大，会把查找框挤扁：
+        # 上/下一处收成窄箭头钮（width 按字符数限死），把宽度还给输入框。
+        ttk.Button(toolbar, text="‹", width=3, style="Ghost.TButton",
+                   command=lambda: self._goto_preview_hit(-1)).grid(row=0, column=1, padx=(0, 2))
+        ttk.Button(toolbar, text="›", width=3, style="Ghost.TButton",
+                   command=lambda: self._goto_preview_hit(1)).grid(row=0, column=2, padx=(0, 8))
+        ttk.Button(toolbar, text="复制正文", style="Secondary.TButton",
+                   command=self._copy_preview_text).grid(row=0, column=3)
 
         text_wrap = tk.Frame(parent, bg=Palette.SURFACE, bd=0)
         text_wrap.grid(row=3, column=0, sticky="nsew", padx=(1, 1), pady=(0, 1))
@@ -687,44 +693,183 @@ class ChatExporterGUI(BaseChineseGUI):
         v_scroll.grid(row=0, column=1, sticky="ns")
         self.preview_text.configure(yscrollcommand=v_scroll.set)
         self._setup_text_tags()
-        self.preview_text.tag_configure("search_hit", background="#FEF0C7")
-        self.preview_text.tag_configure("search_current", background="#FEC84B", foreground=Palette.TEXT)
+        self.preview_text.tag_configure("search_hit", background=Palette.WARNING_SOFT)
+        self.preview_text.tag_configure("search_current", background=Palette.WARNING, foreground=Palette.TEXT)
         self._show_preview_placeholder()
 
+    def _fit_tree_columns(self, _event=None):
+        """标题列吃掉剩余宽度，时间/消息列按字体实测宽度取值。
+
+        固定像素在高 DPI 缩放下必然猜错（150% 下 132px 连日期都放不下），
+        用 font.measure 量出真实渲染宽度。
+        """
+        try:
+            total = self.conv_tree.winfo_width()
+        except tk.TclError:
+            return
+        if total <= 40:
+            return
+        if not hasattr(self, "_tree_cell_font"):
+            import tkinter.font as tkfont
+
+            self._tree_cell_font = tkfont.Font(font=(FONT_UI, 10))
+            self._tree_head_font = tkfont.Font(font=(FONT_UI, 9, "bold"))
+        # 列表里的更新时间是 "%Y-%m-%d %H:%M"（见 _render_matches），按同款样本量宽
+        date_w = max(
+            self._tree_cell_font.measure("2026-12-31 23:59"),
+            self._tree_head_font.measure("更新时间"),
+        ) + 26
+        msg_w = max(
+            self._tree_cell_font.measure("8888"),
+            self._tree_head_font.measure("消息"),
+        ) + 26
+        self.conv_tree.column("title", width=max(180, total - date_w - msg_w - 4))
+        self.conv_tree.column("date", width=date_w)
+        self.conv_tree.column("messages", width=msg_w)
+
+    # ---- Markdown 轻量渲染：预览显示的是排版结果，不是标记源码 ----
     _INLINE_CODE = re.compile(r"`([^`\n]+)`")
+    _INLINE_MD = re.compile(
+        r"`([^`\n]+)`"                        # 1 行内代码
+        r"|\*\*([^*\n]+?)\*\*"                # 2 加粗
+        r"|\[([^\]\n]+)\]\(([^)\s]+)\)"       # 3 链接文字 4 地址（预览只显示文字）
+    )
+    # 不要写成 (.+?)\s*#*\s*$ ——惰性组配尾部 #* 是 O(n²) 回溯，
+    # 一行几千个 '#' 就能把 Tk 主线程冻住几十秒。贪婪匹配后用 rstrip 剥尾。
+    _MD_HEADER = re.compile(r"^(#{1,4})\s+(.+)$")
+    _MD_BULLET = re.compile(r"^(\s*)[-*+•]\s+(.+)$")
+    _MD_NUMBERED = re.compile(r"^(\s*)(\d{1,3})[.、)]\s+(.+)$")
+    _MD_HR = re.compile(r"^\s*(?:-{3,}|\*{3,}|_{3,})\s*$")
+    _MD_QUOTE = re.compile(r"^\s*>\s?(.*)$")
+    _MD_TABLE = re.compile(r"^\s*\|.*\|\s*$")
+    _MD_STRIP_INLINE = re.compile(r"\*\*([^*\n]+?)\*\*|`([^`\n]+)`|\[([^\]\n]+)\]\([^)\s]*\)")
+
+    @staticmethod
+    def _merge_tags(base, extra):
+        """组合文本标签；insert 的 tag 参数接受元组。"""
+        if isinstance(base, tuple):
+            return base + (extra,)
+        return (base, extra)
 
     @classmethod
-    def _inline_segments(cls, text: str, body_tag: str):
-        """把 `反引号` 包起来的片段单独标成行内代码，其余按正文渲染。"""
+    def _inline_segments(cls, text: str, body_tag):
+        """行内标记：`代码`、**加粗**、[链接](url)，其余按正文渲染。"""
         segments = []
         cursor = 0
-        for match in cls._INLINE_CODE.finditer(text):
+        for match in cls._INLINE_MD.finditer(text):
             if match.start() > cursor:
                 segments.append((text[cursor:match.start()], body_tag))
-            segments.append((match.group(1), "inline_code"))
+            if match.group(1) is not None:
+                segments.append((match.group(1), "inline_code"))
+            elif match.group(2) is not None:
+                segments.append((match.group(2), cls._merge_tags(body_tag, "md_bold")))
+            else:
+                segments.append((match.group(3), cls._merge_tags(body_tag, "md_link")))
             cursor = match.end()
         if cursor < len(text):
             segments.append((text[cursor:], body_tag))
         return segments or [(text, body_tag)]
 
     @classmethod
-    def _body_segments(cls, text: str, body_tag: str):
-        """把正文拆成普通段和 ``` 代码块段，代码块用等宽字体和浅底色渲染。
-
-        奇数个围栏说明最后一个代码块没闭合（对话被截停是常态），
-        余下内容仍按代码渲染，绝不丢字。
-        """
+    def _prose_segments(cls, chunk: str, body_tag):
+        """逐行渲染块级结构：标题、列表、引用、分隔线、表格。"""
         segments = []
-        parts = re.split(r"(?m)^[ \t]*```[^\n]*$\n?", text)
-        for index, chunk in enumerate(parts):
-            is_code = index % 2 == 1
+        for line in chunk.split("\n"):
+            stripped = line.strip()
+            if not stripped:
+                segments.append(("\n", body_tag))
+                continue
+            m = cls._MD_HEADER.match(stripped)
+            if m:
+                level = min(len(m.group(1)), 4)
+                # 标题里的行内标记只剥符号不换字号，避免小号 bold 挤进大标题；
+                # 链接同样只留文字（正文里链接也是这么显示的）
+                title = cls._MD_STRIP_INLINE.sub(
+                    lambda g: g.group(1) or g.group(2) or g.group(3), m.group(2).rstrip("# ")
+                )
+                if title.strip():
+                    segments.append((title + "\n", f"md_h{level}"))
+                    continue
+            if cls._MD_HR.match(stripped):
+                segments.append(("─" * 42 + "\n", "md_hr"))
+                continue
+            m = cls._MD_QUOTE.match(line)
+            if m:
+                segments.append(("▍ ", "md_quote_bar"))
+                segments.extend(cls._inline_segments(m.group(1), "md_quote"))
+                segments.append(("\n", "md_quote"))
+                continue
+            if cls._MD_TABLE.match(line):
+                segments.append((line.rstrip() + "\n", "md_table"))
+                continue
+            m = cls._MD_BULLET.match(line)
+            if m:
+                indent = "      " if m.group(1) else ""
+                segments.append((f"{indent}•  ", cls._merge_tags(body_tag, "md_marker")))
+                segments.extend(cls._inline_segments(m.group(2), cls._merge_tags(body_tag, "md_list")))
+                segments.append(("\n", body_tag))
+                continue
+            m = cls._MD_NUMBERED.match(line)
+            if m:
+                indent = "      " if m.group(1) else ""
+                segments.append((f"{indent}{m.group(2)}.  ", cls._merge_tags(body_tag, "md_marker")))
+                segments.extend(cls._inline_segments(m.group(3), cls._merge_tags(body_tag, "md_list")))
+                segments.append(("\n", body_tag))
+                continue
+            segments.extend(cls._inline_segments(line, body_tag))
+            segments.append(("\n", body_tag))
+        return segments
+
+    _FENCE_CLOSE = re.compile(r"`{3,}\s*$")
+
+    @classmethod
+    def _fence_blocks(cls, text: str):
+        """按 CommonMark 语义配对围栏，返回 [(is_code, lang, chunk), ...]。
+
+        无状态 re.split 会把代码块内容里的 ```python 行（比如整段被引用的
+        markdown 教程）当成闭合围栏，之后正文和代码全部互换。逐行走状态机：
+        开栏行记住语言；栏内只有『纯 ``` 行』才闭合——闭合围栏不允许带
+        info string，带语言的行属于内容。未闭合的块照收，绝不丢字。
+        """
+        blocks = []
+        prose: List[str] = []
+        code: List[str] = []
+        lang = ""
+        in_code = False
+        for line in text.split("\n"):
+            stripped = line.strip()
+            if not in_code and stripped.startswith("```"):
+                if prose:
+                    blocks.append((False, "", "\n".join(prose)))
+                    prose = []
+                lang = stripped.lstrip("`").strip()
+                in_code = True
+                continue
+            if in_code and cls._FENCE_CLOSE.fullmatch(stripped):
+                blocks.append((True, lang, "\n".join(code)))
+                code = []
+                in_code = False
+                continue
+            (code if in_code else prose).append(line)
+        if prose:
+            blocks.append((False, "", "\n".join(prose)))
+        if code or in_code:
+            blocks.append((True, lang, "\n".join(code)))
+        return blocks
+
+    @classmethod
+    def _body_segments(cls, text: str, body_tag):
+        """把正文拆成排版段和 ``` 代码块段。未闭合代码块照常渲染，绝不丢字。"""
+        segments = []
+        for is_code, lang, chunk in cls._fence_blocks(text):
             if not chunk.strip():
                 continue
             if is_code:
+                if lang:
+                    segments.append((f"{lang}\n", "code_lang"))
                 segments.append((chunk.rstrip("\n") + "\n", "code_block"))
             else:
-                segments.extend(cls._inline_segments(chunk.strip("\n"), body_tag))
-                segments.append(("\n", body_tag))
+                segments.extend(cls._prose_segments(chunk.strip("\n"), body_tag))
         if not segments and text.strip():
             segments.append((text.strip("\n") + "\n", body_tag))
         return segments
@@ -732,31 +877,60 @@ class ChatExporterGUI(BaseChineseGUI):
     def _setup_text_tags(self):
         super()._setup_text_tags()
         t = self.preview_text
-        t.tag_configure("user_header", font=(FONT_UI, 10, "bold"), foreground=Palette.ACCENT_PRESSED, spacing1=14, spacing3=6)
-        t.tag_configure("user_body", foreground=Palette.TEXT, lmargin1=22, lmargin2=22, rmargin=22, spacing2=2, spacing3=10)
-        t.tag_configure("assistant_header", font=(FONT_UI, 10, "bold"), foreground=Palette.SUCCESS, spacing1=14, spacing3=6)
-        t.tag_configure("assistant_body", foreground=Palette.TEXT, lmargin1=22, lmargin2=22, rmargin=22, spacing2=2, spacing3=10)
+        # 角色头：彩色圆点承载身份色，名字用正文色——比整行染色克制
+        t.tag_configure("user_dot", font=(FONT_UI, 10, "bold"), foreground=Palette.ACCENT, spacing1=20)
+        t.tag_configure("ai_dot", font=(FONT_UI, 10, "bold"), foreground=Palette.AI_ACCENT, spacing1=20)
+        t.tag_configure("user_header", font=(FONT_UI, 10, "bold"), foreground=Palette.TEXT, spacing1=20, spacing3=7)
+        t.tag_configure("assistant_header", font=(FONT_UI, 10, "bold"), foreground=Palette.TEXT, spacing1=20, spacing3=7)
+        t.tag_configure("user_body", foreground=Palette.TEXT, lmargin1=24, lmargin2=24, rmargin=28, spacing2=3, spacing3=12)
+        t.tag_configure("assistant_body", foreground=Palette.TEXT, lmargin1=24, lmargin2=24, rmargin=28, spacing2=3, spacing3=12)
         t.tag_configure("header_meta", font=(FONT_UI, 8), foreground=Palette.TEXT_MUTED)
-        t.tag_configure("message_gap", font=(FONT_UI, 4), spacing1=6, spacing3=6)
+        t.tag_configure("message_gap", font=(FONT_UI, 4), spacing1=8, spacing3=8)
+        t.tag_configure("hint_body", font=(FONT_UI, 9), foreground=Palette.TEXT_MUTED, lmargin1=24, lmargin2=24)
+        # 代码：块与行内共享底色，行内用品牌紫提示"这是代码"
         t.tag_configure(
             "inline_code",
             font=(FONT_MONO, 9),
             background=Palette.CODE_BG,
             foreground=Palette.ACCENT_PRESSED,
         )
-        t.tag_configure("hint_body", font=(FONT_UI, 9), foreground=Palette.TEXT_MUTED, lmargin1=22, lmargin2=22)
+        t.tag_configure(
+            "code_lang",
+            font=(FONT_MONO, 8),
+            foreground=Palette.TEXT_MUTED,
+            background=Palette.CODE_BG,
+            lmargin1=32,
+            lmargin2=32,
+            rmargin=32,
+            spacing1=10,
+        )
         t.tag_configure(
             "code_block",
             font=(FONT_MONO, 9),
             foreground=Palette.TEXT,
             background=Palette.CODE_BG,
-            lmargin1=30,
-            lmargin2=30,
-            rmargin=30,
-            spacing1=8,
-            spacing3=8,
-            wrap=tk.NONE,
+            lmargin1=32,
+            lmargin2=32,
+            rmargin=32,
+            spacing1=6,
+            spacing3=10,
+            # 预览没有横向滚动条，wrap=NONE 会把超宽代码行静默裁掉；
+            # CHAR 换行保证一个字都不丢，导出文件里仍是原始未折行代码。
+            wrap=tk.CHAR,
         )
+        # Markdown 块级排版
+        t.tag_configure("md_h1", font=(FONT_UI, 15, "bold"), foreground=Palette.TEXT, lmargin1=24, lmargin2=24, spacing1=16, spacing3=6)
+        t.tag_configure("md_h2", font=(FONT_UI, 13, "bold"), foreground=Palette.TEXT, lmargin1=24, lmargin2=24, spacing1=14, spacing3=5)
+        t.tag_configure("md_h3", font=(FONT_UI, 11, "bold"), foreground=Palette.TEXT, lmargin1=24, lmargin2=24, spacing1=12, spacing3=4)
+        t.tag_configure("md_h4", font=(FONT_UI, 10, "bold"), foreground=Palette.TEXT_SECONDARY, lmargin1=24, lmargin2=24, spacing1=10, spacing3=3)
+        t.tag_configure("md_bold", font=(FONT_UI, 10, "bold"))
+        t.tag_configure("md_link", foreground=Palette.ACCENT, underline=True)
+        t.tag_configure("md_marker", foreground=Palette.ACCENT, lmargin1=28, lmargin2=46)
+        t.tag_configure("md_list", lmargin1=28, lmargin2=46)
+        t.tag_configure("md_quote", foreground=Palette.TEXT_MUTED, lmargin1=30, lmargin2=44, rmargin=32)
+        t.tag_configure("md_quote_bar", foreground=Palette.BORDER_STRONG, lmargin1=30)
+        t.tag_configure("md_hr", foreground=Palette.BORDER, lmargin1=24, spacing1=10, spacing3=10)
+        t.tag_configure("md_table", font=(FONT_MONO, 9), foreground=Palette.TEXT_SECONDARY, lmargin1=32, lmargin2=32, wrap=tk.CHAR)
 
     def _show_preview_placeholder(self):
         self._preview_plain_text = ""
@@ -866,8 +1040,10 @@ class ChatExporterGUI(BaseChineseGUI):
                 role_name = "用户" if eff_role == Role.USER else "AI 助手"
                 header_tag = "user_header" if eff_role == Role.USER else "assistant_header"
                 body_tag = "user_body" if eff_role == Role.USER else "assistant_body"
+                dot_tag = "user_dot" if eff_role == Role.USER else "ai_dot"
                 if index:
                     segments.append(("\n", "message_gap"))
+                segments.append(("● ", dot_tag))
                 segments.append((f"{role_name}", header_tag))
                 meta_bits = []
                 if message.timestamp:

@@ -18,6 +18,8 @@ class Palette:
     SIDEBAR_HOVER = "#1E293B"
     SURFACE = "#FFFFFF"
     SURFACE_ALT = "#F8FAFC"
+    SURFACE_HOVER = "#F2F4F7"
+    SURFACE_PRESSED = "#EAECF0"
     BORDER = "#E4E7EC"
     BORDER_STRONG = "#D0D5DD"
     TEXT = "#101828"
@@ -31,6 +33,8 @@ class Palette:
     ACCENT_PRESSED = "#4338CA"
     ACCENT_SOFT = "#EEF0FF"
     ACCENT_SOFT_HOVER = "#E4E7FF"
+    # 阅读视图里的角色色：用户=品牌紫，AI=青绿，冷暖分明又不刺眼
+    AI_ACCENT = "#0E9384"
     SUCCESS = "#12B76A"
     SUCCESS_SOFT = "#ECFDF3"
     WARNING = "#F79009"
@@ -52,6 +56,8 @@ DARK_THEME = {
     "SIDEBAR_HOVER": "#1D283D",
     "SURFACE": "#111A2B",
     "SURFACE_ALT": "#18233A",
+    "SURFACE_HOVER": "#1C2740",
+    "SURFACE_PRESSED": "#243050",
     "BORDER": "#26334D",
     "BORDER_STRONG": "#35435F",
     "TEXT": "#E9EEF8",
@@ -65,6 +71,7 @@ DARK_THEME = {
     "ACCENT_PRESSED": "#B4B0FF",
     "ACCENT_SOFT": "#232048",
     "ACCENT_SOFT_HOVER": "#2C2857",
+    "AI_ACCENT": "#2ED3B7",
     "SUCCESS": "#3DD68C",
     "SUCCESS_SOFT": "#11291F",
     "WARNING": "#FDB022",
@@ -92,7 +99,7 @@ def apply_theme(name: str) -> str:
     return name if name in THEMES else "light"
 
 
-_FG_KEYS = ("TEXT", "TEXT_SECONDARY", "TEXT_MUTED", "TEXT_DISABLED", "TEXT_ON_DARK", "TEXT_ON_DARK_MUTED")
+_FG_KEYS = ("TEXT", "TEXT_SECONDARY", "TEXT_MUTED", "TEXT_DISABLED", "TEXT_ON_DARK", "TEXT_ON_DARK_MUTED", "AI_ACCENT")
 
 
 def theme_color_map(source: str, target: str) -> dict:
@@ -297,7 +304,8 @@ def configure_styles(root: tk.Tk) -> ttk.Style:
     )
     style.map(
         "Secondary.TButton",
-        background=[("pressed", "#EAECF0"), ("active", "#F2F4F7"), ("disabled", Palette.SURFACE_ALT)],
+        # hover/pressed 一律取调色板键——写死的浅灰在深色主题下会闪白
+        background=[("pressed", Palette.SURFACE_PRESSED), ("active", Palette.SURFACE_HOVER), ("disabled", Palette.SURFACE_ALT)],
         foreground=[("disabled", Palette.TEXT_DISABLED)],
     )
     style.configure(
@@ -308,7 +316,7 @@ def configure_styles(root: tk.Tk) -> ttk.Style:
     )
     style.map(
         "AccentSoft.TButton",
-        background=[("pressed", "#D9DDFF"), ("active", Palette.ACCENT_SOFT_HOVER), ("disabled", Palette.SURFACE_ALT)],
+        background=[("pressed", Palette.ACCENT_SOFT_HOVER), ("active", Palette.ACCENT_SOFT_HOVER), ("disabled", Palette.SURFACE_ALT)],
         foreground=[("disabled", Palette.TEXT_DISABLED)],
     )
     style.configure(
@@ -319,7 +327,7 @@ def configure_styles(root: tk.Tk) -> ttk.Style:
     )
     style.map(
         "Ghost.TButton",
-        background=[("pressed", "#EAECF0"), ("active", Palette.SURFACE_ALT)],
+        background=[("pressed", Palette.SURFACE_PRESSED), ("active", Palette.SURFACE_HOVER)],
     )
     style.configure(
         "Danger.TButton",
@@ -327,7 +335,7 @@ def configure_styles(root: tk.Tk) -> ttk.Style:
         background=Palette.DANGER_SOFT,
         foreground=Palette.DANGER,
     )
-    style.map("Danger.TButton", background=[("active", "#FEE4E2"), ("pressed", "#FECDCA")])
+    style.map("Danger.TButton", background=[("active", Palette.SURFACE_HOVER), ("pressed", Palette.SURFACE_PRESSED)])
 
     style.configure(
         "Modern.TEntry",
@@ -350,7 +358,7 @@ def configure_styles(root: tk.Tk) -> ttk.Style:
     style.configure(
         "Modern.Treeview",
         font=(FONT_UI, 10),
-        rowheight=42,
+        rowheight=44,
         background=Palette.SURFACE,
         foreground=Palette.TEXT_SECONDARY,
         fieldbackground=Palette.SURFACE,
@@ -371,7 +379,7 @@ def configure_styles(root: tk.Tk) -> ttk.Style:
         background=[("selected", Palette.SELECTION)],
         foreground=[("selected", Palette.ACCENT_PRESSED)],
     )
-    style.map("Modern.Treeview.Heading", background=[("active", "#F2F4F7")])
+    style.map("Modern.Treeview.Heading", background=[("active", Palette.SURFACE_HOVER)])
 
     style.configure(
         "Modern.Vertical.TScrollbar",

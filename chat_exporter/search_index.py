@@ -50,6 +50,12 @@ def index_path() -> Path:
     return storage_dir() / INDEX_FILENAME
 
 
+# 检索文本的「逻辑版本」。conversation_search_text 的语义每变一次就 +1，
+# 否则旧缓存条目的戳仍与对话元数据吻合，会永远返回旧逻辑生成的文本——
+# 用户搜得到预览里没有的词、搜不到预览里有的词。v2：finish.summary 进索引。
+_STAMP_VERSION = "2"
+
+
 def conversation_stamp(conv: Conversation) -> str:
     """新鲜度戳。
 
@@ -67,7 +73,7 @@ def conversation_stamp(conv: Conversation) -> str:
         count = conv.metadata.get("message_count")
     if not count:
         count = len(conv.messages)
-    return f"{updated}|{created}|{count}"
+    return f"v{_STAMP_VERSION}|{updated}|{created}|{count}"
 
 
 class SearchIndex:

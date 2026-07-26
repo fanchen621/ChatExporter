@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from typing import List, Optional, Tuple
 
@@ -258,6 +259,49 @@ def _looks_like_thinking_placeholder(text: str, message: Message) -> bool:
     return has_thinking and any(pattern.search(text or "") for pattern in _THINKING_PLACEHOLDER_PATTERNS)
 
 
+# Agent 型客户端把最终交付作为特定工具的参数提交——前端渲染的正是这个参数，
+# 而不是任何 text part。实测 TRAE 8 条对话里 380 次 finish 调用，
+# `finish.summary` 就是界面上显示的完整 markdown 回答。
+# 按工具名注册，字段按顺序尝试；不在表里的工具一律视为机器动作。
+_ANSWER_TOOL_FIELDS = {
+    "finish": ("summary", "result", "answer"),            # TRAE SOLO
+    "attempt_completion": ("result",),                     # Cline / Roo 系
+    "final_answer": ("answer", "result", "content", "text"),
+}
+
+
+def _tool_carried_answers(message: Message) -> List[str]:
+    """提取工具调用参数里携带的、前端会渲染的回答正文。"""
+    blocks: List[str] = []
+    for part in message.parts:
+        if _part_type(part) != MessagePartType.TOOL_CALL.value:
+            continue
+        fields = _ANSWER_TOOL_FIELDS.get((part.tool_name or "").strip().casefold())
+        if not fields:
+            continue
+        raw = (part.tool_input or part.content or "").strip()
+        if not raw:
+            continue
+        if raw.startswith("{"):
+            try:
+                payload = json.loads(raw)
+            except ValueError:
+                # 截断/损坏的 JSON：宁可少显示也不显示半截转义符
+                continue
+            if isinstance(payload, dict):
+                for field_name in fields:
+                    value = payload.get(field_name)
+                    if isinstance(value, str) and _clean(value):
+                        blocks.append(_clean(value))
+                        break
+        else:
+            # 部分版本直接把纯文本当参数传；机器序列化字面量不算回答
+            value = _clean(raw)
+            if value and value.casefold() not in ("none", "null", "undefined", "{}", "[]"):
+                blocks.append(value)
+    return blocks
+
+
 PREVIEW_FULL = "full"
 PREVIEW_CLEAN = "clean"
 # 「只看对话」的两种落法，由 visible_messages 按整段对话的形态自动选：
@@ -372,6 +416,11 @@ def message_preview_text(message: Message, source_app: str = "", mode: str = PRE
     if not has_text_part and message.content and message.content.strip():
         has_primary_body = append(message.content) or has_primary_body
 
+    # 工具调用里携带的回答（TRAE finish.summary 等）就是前端渲染的正文，
+    # 排在 text part 之后、任何回退之前。
+    for answer in _tool_carried_answers(message):
+        has_primary_body = append(answer) or has_primary_body
+
     # Attachments do not count as the answer body. A message containing only an
     # attachment plus reasoning/tool output still needs its actual delivery.
     if not has_primary_body:
@@ -383,11 +432,17 @@ def message_preview_text(message: Message, source_app: str = "", mode: str = PRE
 
 
 def _has_answer_body(message: Message) -> bool:
-    """这条消息是否带真正的回答正文（而不是只有推理/工具记录）。"""
+    """这条消息是否带真正的回答正文（而不是只有推理/工具记录）。
+
+    工具调用里携带的回答（finish.summary 等）算正文——这正是 TRAE 型客户端
+    前端渲染的内容，有它在场，纯机器轮次就可以放心整条隐藏（strict）。
+    """
     for part in message.parts:
         part_type = _part_type(part)
         if part_type in (MessagePartType.TEXT.value, MessagePartType.CODE.value) and _clean(part.content):
             return True
+    if _tool_carried_answers(message):
+        return True
     return bool(not message.parts and _clean(message.content or ""))
 
 
@@ -406,13 +461,40 @@ def resolve_preview_mode(conversation: Conversation, mode: str) -> str:
     return PREVIEW_CLEAN_CONCISE
 
 
+def _turn_clean_modes(conversation: Conversation) -> List[str]:
+    """「只看对话」按轮裁决，返回逐消息的模式表。
+
+    finish/text 是逐轮的证据，裁决也必须逐轮：同一对话里任务 1 正常收尾、
+    任务 2 被用户中止时，对话级 strict 会把任务 2 的 AI 轮次整体藏掉——
+    阅读视图里用户提问后 AI 凭空消失。一轮 = 一条用户消息到下一条用户消息；
+    该轮 AI 给过回答正文 → strict（机器轮次隐藏），没给过 → concise
+    （保住末块推理当结论）。
+    """
+    messages = conversation.messages
+    modes: List[str] = []
+    start = 0
+    for index in range(1, len(messages) + 1):
+        at_end = index == len(messages)
+        if not at_end and effective_role(messages[index]) != Role.USER:
+            continue
+        segment = messages[start:index]
+        has_body = any(
+            effective_role(m) == Role.ASSISTANT and _has_answer_body(m) for m in segment
+        )
+        modes.extend([PREVIEW_CLEAN_STRICT if has_body else PREVIEW_CLEAN_CONCISE] * len(segment))
+        start = index
+    return modes
+
+
 def visible_messages(conversation: Conversation, mode: str = PREVIEW_FULL) -> List[Tuple[Message, Role, str]]:
     """返回 (message, effective_role, preview_text) 三元组，不修改原对象。"""
+    per_message = _turn_clean_modes(conversation) if mode == PREVIEW_CLEAN else None
     resolved = resolve_preview_mode(conversation, mode)
     result: List[Tuple[Message, Role, str]] = []
-    for message in conversation.messages:
+    for index, message in enumerate(conversation.messages):
         role = effective_role(message)
-        text = message_preview_text(message, source_app=conversation.source_app, mode=resolved)
+        message_mode = per_message[index] if per_message else resolved
+        text = message_preview_text(message, source_app=conversation.source_app, mode=message_mode)
         if not text or role not in VISIBLE_ROLES:
             continue
         result.append((message, role, text))
@@ -420,10 +502,24 @@ def visible_messages(conversation: Conversation, mode: str = PREVIEW_FULL) -> Li
 
 
 def conversation_search_text(conversation: Conversation) -> str:
-    """构建用于本机全文检索的标准化文本。"""
+    """构建用于本机全文检索的标准化文本。
+
+    覆盖面 ≥ 阅读视图：finish.summary 成为正文后会把 thinking 从预览回退里
+    挤出去，但推理里的报错、路径、中间结论仍然要能搜到——索引把两者都收。
+    改变本函数的产出时必须同步升级 search_index._STAMP_VERSION，
+    否则旧缓存永远不失效。
+    """
     parts: List[str] = [_clean(conversation.title)]
     for _message, _role, text in visible_messages(conversation):
         parts.append(text)
+    for message in conversation.messages:
+        if effective_role(message) != Role.ASSISTANT:
+            continue
+        for part in message.parts:
+            if _part_type(part) == MessagePartType.THINKING.value:
+                value = _clean(part.content)
+                if value:
+                    parts.append(value)
     return "\n".join(parts).casefold()
 
 
