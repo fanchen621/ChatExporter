@@ -169,6 +169,24 @@ def test_html_keeps_standalone_tool_messages_collapsed():
 # ============================================================================
 
 
+
+
+def test_tool_message_markdown_fence_keeps_code_box_style():
+    conv = make_conv()
+    conv.messages = [
+        Message(
+            role=Role.TOOL,
+            parts=[MessagePart(type=MessagePartType.TEXT, content="```python\nx=1\n```")],
+        )
+    ]
+    out = HtmlExporter().render(conv)
+
+    assert "<details><summary>" in out
+    assert '<pre><span class="lang">python</span><code>x=1</code></pre>' in out
+    assert "details.thinking > pre, details.tool > pre" in out
+    assert "details pre { margin-bottom: 0;" not in out
+
+
 def test_json_roundtrip_preserves_every_message_and_part():
     conv = make_conv()
     raw = JsonExporter().render(conv)

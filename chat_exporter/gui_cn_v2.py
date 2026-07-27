@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import re
 import threading
 import tkinter as tk
 from datetime import datetime
 from tkinter import messagebox, ttk
 from typing import Dict, List, Optional, Tuple
 
+from . import markdown_render
 from .gui_cn import ChatExporterGUI as BaseChineseGUI
 from .models import AppInfo, Conversation, Role
 from .preview_utils import (
@@ -727,152 +727,15 @@ class ChatExporterGUI(BaseChineseGUI):
         self.conv_tree.column("date", width=date_w)
         self.conv_tree.column("messages", width=msg_w)
 
-    # ---- Markdown 轻量渲染：预览显示的是排版结果，不是标记源码 ----
-    _INLINE_CODE = re.compile(r"`([^`\n]+)`")
-    _INLINE_MD = re.compile(
-        r"`([^`\n]+)`"                        # 1 行内代码
-        r"|\*\*([^*\n]+?)\*\*"                # 2 加粗
-        r"|\[([^\]\n]+)\]\(([^)\s]+)\)"       # 3 链接文字 4 地址（预览只显示文字）
-    )
-    # 不要写成 (.+?)\s*#*\s*$ ——惰性组配尾部 #* 是 O(n²) 回溯，
-    # 一行几千个 '#' 就能把 Tk 主线程冻住几十秒。贪婪匹配后用 rstrip 剥尾。
-    _MD_HEADER = re.compile(r"^(#{1,4})\s+(.+)$")
-    _MD_BULLET = re.compile(r"^(\s*)[-*+•]\s+(.+)$")
-    _MD_NUMBERED = re.compile(r"^(\s*)(\d{1,3})[.、)]\s+(.+)$")
-    _MD_HR = re.compile(r"^\s*(?:-{3,}|\*{3,}|_{3,})\s*$")
-    _MD_QUOTE = re.compile(r"^\s*>\s?(.*)$")
-    _MD_TABLE = re.compile(r"^\s*\|.*\|\s*$")
-    _MD_STRIP_INLINE = re.compile(r"\*\*([^*\n]+?)\*\*|`([^`\n]+)`|\[([^\]\n]+)\]\([^)\s]*\)")
-
-    @staticmethod
-    def _merge_tags(base, extra):
-        """组合文本标签；insert 的 tag 参数接受元组。"""
-        if isinstance(base, tuple):
-            return base + (extra,)
-        return (base, extra)
-
-    @classmethod
-    def _inline_segments(cls, text: str, body_tag):
-        """行内标记：`代码`、**加粗**、[链接](url)，其余按正文渲染。"""
-        segments = []
-        cursor = 0
-        for match in cls._INLINE_MD.finditer(text):
-            if match.start() > cursor:
-                segments.append((text[cursor:match.start()], body_tag))
-            if match.group(1) is not None:
-                segments.append((match.group(1), "inline_code"))
-            elif match.group(2) is not None:
-                segments.append((match.group(2), cls._merge_tags(body_tag, "md_bold")))
-            else:
-                segments.append((match.group(3), cls._merge_tags(body_tag, "md_link")))
-            cursor = match.end()
-        if cursor < len(text):
-            segments.append((text[cursor:], body_tag))
-        return segments or [(text, body_tag)]
-
-    @classmethod
-    def _prose_segments(cls, chunk: str, body_tag):
-        """逐行渲染块级结构：标题、列表、引用、分隔线、表格。"""
-        segments = []
-        for line in chunk.split("\n"):
-            stripped = line.strip()
-            if not stripped:
-                segments.append(("\n", body_tag))
-                continue
-            m = cls._MD_HEADER.match(stripped)
-            if m:
-                level = min(len(m.group(1)), 4)
-                # 标题里的行内标记只剥符号不换字号，避免小号 bold 挤进大标题；
-                # 链接同样只留文字（正文里链接也是这么显示的）
-                title = cls._MD_STRIP_INLINE.sub(
-                    lambda g: g.group(1) or g.group(2) or g.group(3), m.group(2).rstrip("# ")
-                )
-                if title.strip():
-                    segments.append((title + "\n", f"md_h{level}"))
-                    continue
-            if cls._MD_HR.match(stripped):
-                segments.append(("─" * 42 + "\n", "md_hr"))
-                continue
-            m = cls._MD_QUOTE.match(line)
-            if m:
-                segments.append(("▍ ", "md_quote_bar"))
-                segments.extend(cls._inline_segments(m.group(1), "md_quote"))
-                segments.append(("\n", "md_quote"))
-                continue
-            if cls._MD_TABLE.match(line):
-                segments.append((line.rstrip() + "\n", "md_table"))
-                continue
-            m = cls._MD_BULLET.match(line)
-            if m:
-                indent = "      " if m.group(1) else ""
-                segments.append((f"{indent}•  ", cls._merge_tags(body_tag, "md_marker")))
-                segments.extend(cls._inline_segments(m.group(2), cls._merge_tags(body_tag, "md_list")))
-                segments.append(("\n", body_tag))
-                continue
-            m = cls._MD_NUMBERED.match(line)
-            if m:
-                indent = "      " if m.group(1) else ""
-                segments.append((f"{indent}{m.group(2)}.  ", cls._merge_tags(body_tag, "md_marker")))
-                segments.extend(cls._inline_segments(m.group(3), cls._merge_tags(body_tag, "md_list")))
-                segments.append(("\n", body_tag))
-                continue
-            segments.extend(cls._inline_segments(line, body_tag))
-            segments.append(("\n", body_tag))
-        return segments
-
-    _FENCE_CLOSE = re.compile(r"`{3,}\s*$")
-
-    @classmethod
-    def _fence_blocks(cls, text: str):
-        """按 CommonMark 语义配对围栏，返回 [(is_code, lang, chunk), ...]。
-
-        无状态 re.split 会把代码块内容里的 ```python 行（比如整段被引用的
-        markdown 教程）当成闭合围栏，之后正文和代码全部互换。逐行走状态机：
-        开栏行记住语言；栏内只有『纯 ``` 行』才闭合——闭合围栏不允许带
-        info string，带语言的行属于内容。未闭合的块照收，绝不丢字。
-        """
-        blocks = []
-        prose: List[str] = []
-        code: List[str] = []
-        lang = ""
-        in_code = False
-        for line in text.split("\n"):
-            stripped = line.strip()
-            if not in_code and stripped.startswith("```"):
-                if prose:
-                    blocks.append((False, "", "\n".join(prose)))
-                    prose = []
-                lang = stripped.lstrip("`").strip()
-                in_code = True
-                continue
-            if in_code and cls._FENCE_CLOSE.fullmatch(stripped):
-                blocks.append((True, lang, "\n".join(code)))
-                code = []
-                in_code = False
-                continue
-            (code if in_code else prose).append(line)
-        if prose:
-            blocks.append((False, "", "\n".join(prose)))
-        if code or in_code:
-            blocks.append((True, lang, "\n".join(code)))
-        return blocks
+    # ---- Markdown 轻量渲染 ----
+    # 解析器已抽到 chat_exporter/markdown_render.py，预览面板与 HTML 导出共用同一份。
+    # 抽取前 HtmlExporter 只做转义，导出文件里 **加粗**、# 标题、表格竖线全是字面量——
+    # 程序内的预览反而比导出的文件渲染得好。这里只留入口，既有调用点与测试不变。
 
     @classmethod
     def _body_segments(cls, text: str, body_tag):
-        """把正文拆成排版段和 ``` 代码块段。未闭合代码块照常渲染，绝不丢字。"""
-        segments = []
-        for is_code, lang, chunk in cls._fence_blocks(text):
-            if not chunk.strip():
-                continue
-            if is_code:
-                if lang:
-                    segments.append((f"{lang}\n", "code_lang"))
-                segments.append((chunk.rstrip("\n") + "\n", "code_block"))
-            else:
-                segments.extend(cls._prose_segments(chunk.strip("\n"), body_tag))
-        if not segments and text.strip():
-            segments.append((text.strip("\n") + "\n", body_tag))
-        return segments
+        """把正文渲染成 (文本, 标签) 序列。未闭合代码块照常渲染，绝不丢字。"""
+        return markdown_render.render_tk(text, body_tag)
 
     def _setup_text_tags(self):
         super()._setup_text_tags()

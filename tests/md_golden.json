@@ -1,0 +1,1149 @@
+{
+ "empty": [],
+ "blank_only": [],
+ "plain": [
+  [
+   "就是一段普通的话。",
+   "assistant_body"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ]
+ ],
+ "multi_para": [
+  [
+   "第一段。",
+   "assistant_body"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "第二段。",
+   "assistant_body"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "第三段。",
+   "assistant_body"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ]
+ ],
+ "headers": [
+  [
+   "一级\n",
+   "md_h1"
+  ],
+  [
+   "二级\n",
+   "md_h2"
+  ],
+  [
+   "三级\n",
+   "md_h3"
+  ],
+  [
+   "四级\n",
+   "md_h4"
+  ],
+  [
+   "##### 五级不算标题",
+   "assistant_body"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ]
+ ],
+ "header_trailing_hashes": [
+  [
+   "标题\n",
+   "md_h2"
+  ]
+ ],
+ "header_with_inline": [
+  [
+   "参考 重点 与 code 与 文档\n",
+   "md_h2"
+  ]
+ ],
+ "header_only_markup": [
+  [
+   "**\n",
+   "md_h2"
+  ]
+ ],
+ "bold": [
+  [
+   "这是 ",
+   "assistant_body"
+  ],
+  [
+   "加粗",
+   [
+    "assistant_body",
+    "md_bold"
+   ]
+  ],
+  [
+   " 文字。",
+   "assistant_body"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ]
+ ],
+ "bold_multiple": [
+  [
+   "一",
+   [
+    "assistant_body",
+    "md_bold"
+   ]
+  ],
+  [
+   " 普通 ",
+   "assistant_body"
+  ],
+  [
+   "二",
+   [
+    "assistant_body",
+    "md_bold"
+   ]
+  ],
+  [
+   " 普通 ",
+   "assistant_body"
+  ],
+  [
+   "三",
+   [
+    "assistant_body",
+    "md_bold"
+   ]
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ]
+ ],
+ "inline_code": [
+  [
+   "运行 ",
+   "assistant_body"
+  ],
+  [
+   "pip install x",
+   "inline_code"
+  ],
+  [
+   " 就好。",
+   "assistant_body"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ]
+ ],
+ "link": [
+  [
+   "见 ",
+   "assistant_body"
+  ],
+  [
+   "文档",
+   [
+    "assistant_body",
+    "md_link"
+   ]
+  ],
+  [
+   " 一节。",
+   "assistant_body"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ]
+ ],
+ "link_and_code": [
+  [
+   "把 ",
+   "assistant_body"
+  ],
+  [
+   "--flag",
+   "inline_code"
+  ],
+  [
+   " 写进 ",
+   "assistant_body"
+  ],
+  [
+   "配置",
+   [
+    "assistant_body",
+    "md_link"
+   ]
+  ],
+  [
+   " 里。",
+   "assistant_body"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ]
+ ],
+ "bullets": [
+  [
+   "•  ",
+   [
+    "assistant_body",
+    "md_marker"
+   ]
+  ],
+  [
+   "第一项",
+   [
+    "assistant_body",
+    "md_list"
+   ]
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "•  ",
+   [
+    "assistant_body",
+    "md_marker"
+   ]
+  ],
+  [
+   "第二项",
+   [
+    "assistant_body",
+    "md_list"
+   ]
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "•  ",
+   [
+    "assistant_body",
+    "md_marker"
+   ]
+  ],
+  [
+   "第三项",
+   [
+    "assistant_body",
+    "md_list"
+   ]
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ]
+ ],
+ "bullets_nested": [
+  [
+   "•  ",
+   [
+    "assistant_body",
+    "md_marker"
+   ]
+  ],
+  [
+   "顶层",
+   [
+    "assistant_body",
+    "md_list"
+   ]
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "      •  ",
+   [
+    "assistant_body",
+    "md_marker"
+   ]
+  ],
+  [
+   "嵌套一",
+   [
+    "assistant_body",
+    "md_list"
+   ]
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "      •  ",
+   [
+    "assistant_body",
+    "md_marker"
+   ]
+  ],
+  [
+   "嵌套二",
+   [
+    "assistant_body",
+    "md_list"
+   ]
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "•  ",
+   [
+    "assistant_body",
+    "md_marker"
+   ]
+  ],
+  [
+   "又一个顶层",
+   [
+    "assistant_body",
+    "md_list"
+   ]
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ]
+ ],
+ "bullets_star": [
+  [
+   "•  ",
+   [
+    "assistant_body",
+    "md_marker"
+   ]
+  ],
+  [
+   "星号项",
+   [
+    "assistant_body",
+    "md_list"
+   ]
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "•  ",
+   [
+    "assistant_body",
+    "md_marker"
+   ]
+  ],
+  [
+   "加号项",
+   [
+    "assistant_body",
+    "md_list"
+   ]
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "•  ",
+   [
+    "assistant_body",
+    "md_marker"
+   ]
+  ],
+  [
+   "圆点项",
+   [
+    "assistant_body",
+    "md_list"
+   ]
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ]
+ ],
+ "bullets_with_inline": [
+  [
+   "•  ",
+   [
+    "assistant_body",
+    "md_marker"
+   ]
+  ],
+  [
+   "装 ",
+   [
+    "assistant_body",
+    "md_list"
+   ]
+  ],
+  [
+   "foo",
+   "inline_code"
+  ],
+  [
+   " 包",
+   [
+    "assistant_body",
+    "md_list"
+   ]
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "•  ",
+   [
+    "assistant_body",
+    "md_marker"
+   ]
+  ],
+  [
+   "看 ",
+   [
+    "assistant_body",
+    "md_list"
+   ]
+  ],
+  [
+   "重点",
+   [
+    "assistant_body",
+    "md_list",
+    "md_bold"
+   ]
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "•  ",
+   [
+    "assistant_body",
+    "md_marker"
+   ]
+  ],
+  [
+   "读 ",
+   [
+    "assistant_body",
+    "md_list"
+   ]
+  ],
+  [
+   "文档",
+   [
+    "assistant_body",
+    "md_list",
+    "md_link"
+   ]
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ]
+ ],
+ "numbered": [
+  [
+   "1.  ",
+   [
+    "assistant_body",
+    "md_marker"
+   ]
+  ],
+  [
+   "第一步",
+   [
+    "assistant_body",
+    "md_list"
+   ]
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "2.  ",
+   [
+    "assistant_body",
+    "md_marker"
+   ]
+  ],
+  [
+   "第二步",
+   [
+    "assistant_body",
+    "md_list"
+   ]
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "3.  ",
+   [
+    "assistant_body",
+    "md_marker"
+   ]
+  ],
+  [
+   "第三步",
+   [
+    "assistant_body",
+    "md_list"
+   ]
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ]
+ ],
+ "numbered_cn": [
+  [
+   "1、中文顿号",
+   "assistant_body"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "2.  ",
+   [
+    "assistant_body",
+    "md_marker"
+   ]
+  ],
+  [
+   "右括号",
+   [
+    "assistant_body",
+    "md_list"
+   ]
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ]
+ ],
+ "numbered_nested": [
+  [
+   "1.  ",
+   [
+    "assistant_body",
+    "md_marker"
+   ]
+  ],
+  [
+   "顶层",
+   [
+    "assistant_body",
+    "md_list"
+   ]
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "      1.  ",
+   [
+    "assistant_body",
+    "md_marker"
+   ]
+  ],
+  [
+   "嵌套",
+   [
+    "assistant_body",
+    "md_list"
+   ]
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ]
+ ],
+ "quote": [
+  [
+   "▍ ",
+   "md_quote_bar"
+  ],
+  [
+   "这是引用。",
+   "md_quote"
+  ],
+  [
+   "\n",
+   "md_quote"
+  ],
+  [
+   "▍ ",
+   "md_quote_bar"
+  ],
+  [
+   "第二行。",
+   "md_quote"
+  ],
+  [
+   "\n",
+   "md_quote"
+  ]
+ ],
+ "quote_with_inline": [
+  [
+   "▍ ",
+   "md_quote_bar"
+  ],
+  [
+   "引用里有 ",
+   "md_quote"
+  ],
+  [
+   "加粗",
+   [
+    "md_quote",
+    "md_bold"
+   ]
+  ],
+  [
+   " 和 ",
+   "md_quote"
+  ],
+  [
+   "代码",
+   "inline_code"
+  ],
+  [
+   "\n",
+   "md_quote"
+  ]
+ ],
+ "quote_empty": [
+  [
+   "▍ ",
+   "md_quote_bar"
+  ],
+  [
+   "",
+   "md_quote"
+  ],
+  [
+   "\n",
+   "md_quote"
+  ]
+ ],
+ "hr_dash": [
+  [
+   "上面",
+   "assistant_body"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "──────────────────────────────────────────\n",
+   "md_hr"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "下面",
+   "assistant_body"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ]
+ ],
+ "hr_star": [
+  [
+   "──────────────────────────────────────────\n",
+   "md_hr"
+  ]
+ ],
+ "hr_underscore": [
+  [
+   "──────────────────────────────────────────\n",
+   "md_hr"
+  ]
+ ],
+ "table": [
+  [
+   "| 列A | 列B |\n",
+   "md_table"
+  ],
+  [
+   "|---|---|\n",
+   "md_table"
+  ],
+  [
+   "| 1 | 2 |\n",
+   "md_table"
+  ],
+  [
+   "| 3 | 4 |\n",
+   "md_table"
+  ]
+ ],
+ "table_aligned": [
+  [
+   "| 左 | 中 | 右 |\n",
+   "md_table"
+  ],
+  [
+   "|:---|:---:|---:|\n",
+   "md_table"
+  ],
+  [
+   "| a | b | c |\n",
+   "md_table"
+  ]
+ ],
+ "table_no_sep": [
+  [
+   "| 只有 | 一行 |\n",
+   "md_table"
+  ]
+ ],
+ "code_plain": [
+  [
+   "print(1)\n",
+   "code_block"
+  ]
+ ],
+ "code_lang": [
+  [
+   "python\n",
+   "code_lang"
+  ],
+  [
+   "print(1)\nprint(2)\n",
+   "code_block"
+  ]
+ ],
+ "code_unclosed": [
+  [
+   "python\n",
+   "code_lang"
+  ],
+  [
+   "print(1)\n没有闭合\n",
+   "code_block"
+  ]
+ ],
+ "code_nested_fence": [
+  [
+   "教程如下：",
+   "assistant_body"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "markdown\n",
+   "code_lang"
+  ],
+  [
+   "先写围栏：\n```python\nprint(1)\n",
+   "code_block"
+  ],
+  [
+   "真正文结束",
+   "assistant_body"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ]
+ ],
+ "code_then_prose": [
+  [
+   "py\n",
+   "code_lang"
+  ],
+  [
+   "x=1\n",
+   "code_block"
+  ],
+  [
+   "后面还有正文 ",
+   "assistant_body"
+  ],
+  [
+   "加粗",
+   [
+    "assistant_body",
+    "md_bold"
+   ]
+  ],
+  [
+   "。",
+   "assistant_body"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ]
+ ],
+ "code_empty": [
+  [
+   "```python\n```\n",
+   "assistant_body"
+  ]
+ ],
+ "mixed_doc": [
+  [
+   "根因\n",
+   "md_h1"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "问题出在缓存键上：它只用了 ",
+   "assistant_body"
+  ],
+  [
+   "user_id",
+   "inline_code"
+  ],
+  [
+   "，没有把 ",
+   "assistant_body"
+  ],
+  [
+   "locale",
+   "inline_code"
+  ],
+  [
+   " 算进去。",
+   "assistant_body"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "修复\n",
+   "md_h2"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "1.  ",
+   [
+    "assistant_body",
+    "md_marker"
+   ]
+  ],
+  [
+   "把 ",
+   [
+    "assistant_body",
+    "md_list"
+   ]
+  ],
+  [
+   "locale",
+   "inline_code"
+  ],
+  [
+   " 加进键",
+   [
+    "assistant_body",
+    "md_list"
+   ]
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "2.  ",
+   [
+    "assistant_body",
+    "md_marker"
+   ]
+  ],
+  [
+   "清一次旧缓存",
+   [
+    "assistant_body",
+    "md_list"
+   ]
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "python\n",
+   "code_lang"
+  ],
+  [
+   "def key(uid, locale):\n    return f\"{uid}:{locale}\"\n",
+   "code_block"
+  ],
+  [
+   "▍ ",
+   "md_quote_bar"
+  ],
+  [
+   "注意：上线前先灰度。",
+   "md_quote"
+  ],
+  [
+   "\n",
+   "md_quote"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "| 环境 | 状态 |\n",
+   "md_table"
+  ],
+  [
+   "|---|---|\n",
+   "md_table"
+  ],
+  [
+   "| dev | OK |\n",
+   "md_table"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "──────────────────────────────────────────\n",
+   "md_hr"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "参考 ",
+   "assistant_body"
+  ],
+  [
+   "文档",
+   [
+    "assistant_body",
+    "md_link"
+   ]
+  ],
+  [
+   "。",
+   "assistant_body"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ]
+ ],
+ "html_injection": [
+  [
+   "<script>alert(1)</script> & \"引号\" 与 <b>标签</b>",
+   "assistant_body"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ]
+ ],
+ "html_in_code": [
+  [
+   "<script>alert(1)</script>\n",
+   "code_block"
+  ]
+ ],
+ "html_in_bold": [
+  [
+   "<b>粗</b>",
+   [
+    "assistant_body",
+    "md_bold"
+   ]
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ]
+ ],
+ "html_in_link": [
+  [
+   "<img>",
+   [
+    "assistant_body",
+    "md_link"
+   ]
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ]
+ ],
+ "unicode": [
+  [
+   "emoji 😀 与 中文 と 日本語 и русский",
+   "assistant_body"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ]
+ ],
+ "long_line": [
+  [
+   "很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。很长的一行。",
+   "assistant_body"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ]
+ ],
+ "hash_flood": [
+  [
+   "abc####################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################x\n",
+   "md_h1"
+  ]
+ ],
+ "backtick_unbalanced": [
+  [
+   "这里有 ` 一个反引号",
+   "assistant_body"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ]
+ ],
+ "asterisk_unbalanced": [
+  [
+   "这里有 ** 两个星号",
+   "assistant_body"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ]
+ ],
+ "windows_newlines": [
+  [
+   "第一行\r",
+   "assistant_body"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "第二行\r",
+   "assistant_body"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ]
+ ],
+ "tabs": [
+  [
+   "\t缩进的行",
+   "assistant_body"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "\t\t更深",
+   "assistant_body"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ]
+ ],
+ "only_whitespace_lines": [
+  [
+   "文字",
+   "assistant_body"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ],
+  [
+   "文字",
+   "assistant_body"
+  ],
+  [
+   "\n",
+   "assistant_body"
+  ]
+ ]
+}

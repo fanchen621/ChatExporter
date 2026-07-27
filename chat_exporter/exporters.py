@@ -19,6 +19,7 @@ import os
 from datetime import date, datetime
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from . import markdown_render
 from .markdown_exporter import MarkdownExporter
 from .models import Conversation, Message, MessagePart, MessagePartType, Role
 from .preview_utils import effective_role, plain_preview_text, strip_internal_context
@@ -175,6 +176,47 @@ body {
 .who { font-weight: 600; color: var(--fg); font-size: 15px; }
 .para { white-space: pre-wrap; word-wrap: break-word; overflow-wrap: anywhere; margin: 0 0 12px; }
 .para:last-child { margin-bottom: 0; }
+/* ---- 正文里的 Markdown 结构（作用域收在 .msg 内，别碰标题区的 h1） ---- */
+.msg h1, .msg h2, .msg h3, .msg h4 { margin: 18px 0 8px; line-height: 1.5; }
+/* 正文首个元素不要再顶一段外边距——注意正文包在 .msg-body 里，
+   写成 .msg > :first-child 是选不中的。 */
+.msg-body > :first-child { margin-top: 0; }
+.msg-body > :last-child { margin-bottom: 0; }
+.msg h1 { font-size: 21px; }
+.msg h2 { font-size: 18px; }
+.msg h3 { font-size: 16px; }
+.msg h4 { font-size: 15px; color: var(--muted); }
+.msg ul, .msg ol { margin: 0 0 12px; padding-left: 26px; }
+.msg li { margin: 3px 0; }
+.msg li > ul, .msg li > ol { margin: 3px 0 0; }
+.msg strong { font-weight: 600; }
+.msg a { color: var(--ai-accent); }
+blockquote.para {
+  margin: 0 0 12px;
+  padding: 2px 0 2px 14px;
+  border-left: 3px solid var(--line);
+  color: var(--muted);
+}
+.msg hr { border: none; border-top: 1px solid var(--line); margin: 16px 0; }
+/* 宽表格自己横向滚动，不把页面撑破 */
+.msg table {
+  border-collapse: collapse;
+  margin: 0 0 12px;
+  font-size: 14px;
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.msg th, .msg td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; }
+.msg th { background: var(--code-bg); font-weight: 600; }
+/* 行内代码给个底色；pre 里的 code 不能被这条命中 */
+:not(pre) > code {
+  background: var(--code-bg);
+  border: 1px solid var(--code-line);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.9em;
+}
 pre {
   background: var(--code-bg);
   border: 1px solid var(--code-line);
@@ -198,7 +240,7 @@ details {
 }
 details > summary { cursor: pointer; color: var(--muted); font-size: 14px; user-select: none; }
 details[open] > summary { margin-bottom: 8px; }
-details pre { margin-bottom: 0; background: transparent; border: none; padding: 0; }
+details.thinking > pre, details.tool > pre { margin-bottom: 0; background: transparent; border: none; padding: 0; }
 .attachment { color: var(--muted); font-size: 14px; margin: 0 0 12px; }
 .foot { color: var(--muted); font-size: 13px; text-align: center; margin-top: 28px; }
 @media (max-width: 640px) {
@@ -335,7 +377,12 @@ class HtmlExporter(BaseExporter):
 
     @staticmethod
     def _para(text: str) -> str:
-        return f'<div class="para">{_esc(text)}</div>'
+        """正文按 Markdown 渲染，与预览面板共用同一份解析器。
+
+        以前这里只做转义、靠 CSS 的 pre-wrap 保留换行，于是导出的 HTML 里
+        `**加粗**`、`# 标题`、表格竖线全是字面量——程序内的预览反而渲染得更好。
+        """
+        return markdown_render.render_html(text)
 
     @staticmethod
     def _code(content: str, language: Optional[str]) -> str:
