@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import ctypes
 import threading
+import time
+import traceback
 import tkinter as tk
 from datetime import datetime, timedelta
 from tkinter import filedialog, messagebox, ttk
@@ -51,6 +53,12 @@ class ChatExporterGUI(BaseChineseGUI):
     """v1.1.3：面向高 DPI 真机的自适应中文工作台。"""
 
     SIDEBAR_WIDTH = 304
+    EXPORT_ACTION_LABELS = {
+        "markdown": "Markdown",
+        "html": "HTML",
+        "json": "JSON",
+        "txt": "纯文本",
+    }
 
     DATE_FILTER_ALL = "全部时间"
     DATE_FILTERS = (
@@ -66,6 +74,9 @@ class ChatExporterGUI(BaseChineseGUI):
         # 主题必须在任何控件被创建之前定下来：界面代码是在构建时直接读 Palette 的。
         self.settings = _load_settings()
         self.theme_name = apply_theme(self.settings.get("theme", "light") or "light")
+        self._export_running = False
+        self._export_error_dialog = None
+        self._export_error_details = ""
         super().__init__()
 
         # 程序检测通过 root.after() 延迟启动，因此在这里替换适配器仍早于首次检测。
@@ -278,13 +289,13 @@ class ChatExporterGUI(BaseChineseGUI):
             textvariable=self.export_format_var,
             values=[label for _fid, label in FORMAT_CHOICES],
             state="readonly",
-            width=9,
+            width=14,
             font=(FONT_UI, 9),
         )
         format_box.pack(side=tk.LEFT, padx=(0, 10))
         format_box.bind(
             "<<ComboboxSelected>>",
-            lambda _e: self.settings.set("export_format", self._selected_format_id()),
+            self._on_export_format_changed,
         )
 
         self.batch_button = ttk.Button(
@@ -571,35 +582,57 @@ class ChatExporterGUI(BaseChineseGUI):
         return picked if len(picked) > 1 else []
 
     def _export_all(self):
+        if self._export_running:
+            return
         picked = self._multi_selected_conversations()
-        if not picked:
-            super()._export_all()
+        conversations = picked or list(self.current_conversations)
+        if not conversations:
             return
 
         output_dir = filedialog.askdirectory(
-            title=f"导出选中的 {len(picked)} 条对话",
+            title=(f"导出选中的 {len(picked)} 条对话" if picked else "选择批量导出目录"),
             initialdir=self.settings.get("last_export_dir", "") or None,
         )
         if not output_dir:
             return
+        if not picked and not messagebox.askyesno(
+            "批量导出",
+            f"将 {len(conversations)} 条对话导出到：\n{output_dir}\n\n是否继续？",
+        ):
+            return
         adapter = self.current_adapter
-        self._set_status(f"正在导出选中的 {len(picked)} 条…", progress=0, tone="info")
-        self.batch_button.configure(state=tk.DISABLED)
+        scope = f"选中的 {len(picked)} 条" if picked else f"全部 {len(conversations)} 条"
+        self._begin_export_activity(f"正在导出{scope}对话…")
 
         def worker():
             try:
-                count, failures = self._batch_export_full_conversations(picked, output_dir, adapter)
+                count, failures = self._batch_export_full_conversations(conversations, output_dir, adapter)
                 self._post_ui(self._on_batch_export_complete, count, output_dir, failures)
             except Exception as exc:
-                self._post_ui(self._on_batch_export_failed, str(exc))
+                self._post_ui(
+                    self._on_batch_export_failed,
+                    str(exc),
+                    traceback.format_exc(),
+                    output_dir,
+                )
 
         threading.Thread(target=worker, daemon=True, name="batch-export-selected").start()
 
     def _sync_action_states(self):
         super()._sync_action_states()
+        busy = getattr(self, "_export_running", False)
         picked = self._multi_selected_conversations()
+        format_name = self._selected_format_short_label()
+        if hasattr(self, "export_button"):
+            self.export_button.configure(
+                text=f"正在生成 {format_name}…" if busy else f"导出 {format_name}",
+                state=tk.DISABLED if busy else self.export_button.cget("state"),
+            )
         if hasattr(self, "batch_button"):
-            self.batch_button.configure(text=f"导出选中 {len(picked)} 条" if picked else "批量导出")
+            self.batch_button.configure(
+                text="处理中…" if busy else (f"导出选中 {len(picked)} 条" if picked else "批量导出"),
+                state=tk.DISABLED if busy else self.batch_button.cget("state"),
+            )
 
     def _selected_format_id(self) -> str:
         label = self.export_format_var.get() if hasattr(self, "export_format_var") else ""
@@ -608,7 +641,16 @@ class ChatExporterGUI(BaseChineseGUI):
                 return fid
         return "markdown"
 
+    def _selected_format_short_label(self) -> str:
+        return self.EXPORT_ACTION_LABELS.get(self._selected_format_id(), "文件")
+
+    def _on_export_format_changed(self, _event=None):
+        self.settings.set("export_format", self._selected_format_id())
+        self._sync_action_states()
+
     def _export_selected(self):
+        if self._export_running:
+            return
         conv = self.selected_conv
         if not conv:
             return
@@ -629,14 +671,201 @@ class ChatExporterGUI(BaseChineseGUI):
         )
         if not path:
             return
-        try:
-            exporter.export(conv, path)
-        except Exception as exc:
-            messagebox.showerror("导出失败", str(exc))
-            self._set_status(f"导出失败：{exc}", tone="danger")
-            return
-        self._set_status(f"已导出：{os.path.basename(path)}", progress=100, tone="success")
+        message_count = len(conv.messages)
+        self._begin_export_activity(
+            f"正在生成 {exporter.label} · {message_count:,} 条消息…"
+        )
+
+        def worker():
+            started = time.perf_counter()
+            try:
+                exporter.export(conv, path)
+                size = os.path.getsize(path)
+            except Exception as exc:
+                self._post_ui(
+                    self._on_single_export_failed,
+                    conv.title or "这条对话",
+                    exporter.label,
+                    path,
+                    f"{type(exc).__name__}: {exc}",
+                    traceback.format_exc(),
+                )
+                return
+            self._post_ui(
+                self._on_single_export_complete,
+                path,
+                size,
+                time.perf_counter() - started,
+            )
+
+        threading.Thread(target=worker, daemon=True, name="single-export").start()
+
+    def _begin_export_activity(self, status: str):
+        self._export_running = True
+        self._set_busy_progress(True)
+        self._set_status(status, tone="info")
+        self._sync_action_states()
+
+    def _finish_export_activity(self):
+        self._export_running = False
+        self._set_busy_progress(False)
+        self._sync_action_states()
+
+    @staticmethod
+    def _human_file_size(size: int) -> str:
+        value = float(max(0, size))
+        for unit in ("B", "KB", "MB", "GB"):
+            if value < 1024 or unit == "GB":
+                return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+            value /= 1024
+        return f"{size} B"
+
+    def _on_single_export_complete(self, path: str, size: int, elapsed: float):
+        self._finish_export_activity()
+        self._set_status(
+            f"已导出 {os.path.basename(path)} · {self._human_file_size(size)} · {elapsed:.1f} 秒",
+            progress=100,
+            tone="success",
+        )
         self._after_export(path)
+
+    def _on_single_export_failed(
+        self,
+        title: str,
+        exporter_label: str,
+        path: str,
+        error: str,
+        details: str,
+    ):
+        self._finish_export_activity()
+        self._set_status("导出未完成 · 对话和已有文件均未受影响", tone="danger")
+        self._show_export_failure(title, exporter_label, path, error, details)
+
+    def _show_export_failure(
+        self,
+        title: str,
+        exporter_label: str,
+        path: str,
+        error: str,
+        details: str,
+    ):
+        self._export_error_details = (
+            f"对话：{title}\n格式：{exporter_label}\n目标：{path}\n错误：{error}\n\n{details}"
+        )
+        if self._export_error_dialog and self._export_error_dialog.winfo_exists():
+            self._export_error_dialog.destroy()
+
+        dialog = tk.Toplevel(self.root)
+        self._export_error_dialog = dialog
+        dialog.title("导出未完成")
+        dialog.transient(self.root)
+        dialog.resizable(True, True)
+        dialog.configure(bg=Palette.WINDOW)
+        dialog.minsize(620, 390)
+        place_centered(dialog, self.root, 720, 450)
+        dialog.protocol("WM_DELETE_WINDOW", self._close_export_error_dialog)
+        dialog.grid_rowconfigure(1, weight=1)
+        dialog.grid_columnconfigure(0, weight=1)
+
+        hero = tk.Frame(dialog, bg=Palette.SURFACE, padx=24, pady=18)
+        hero.grid(row=0, column=0, sticky="ew")
+        tk.Label(
+            hero,
+            text="导出没有完成",
+            bg=Palette.SURFACE,
+            fg=Palette.DANGER,
+            font=(FONT_UI, 16, "bold"),
+        ).pack(anchor=tk.W)
+        tk.Label(
+            hero,
+            text="对话数据没有被修改，已有目标文件也保持原样。",
+            bg=Palette.SURFACE,
+            fg=Palette.TEXT_SECONDARY,
+            font=(FONT_UI, 9),
+        ).pack(anchor=tk.W, pady=(5, 0))
+
+        body = tk.Frame(dialog, bg=Palette.WINDOW, padx=24, pady=16)
+        body.grid(row=1, column=0, sticky="nsew")
+        body.grid_rowconfigure(2, weight=1)
+        body.grid_columnconfigure(0, weight=1)
+        tk.Label(
+            body,
+            text=f"{title}\n{exporter_label}  ·  {os.path.basename(path)}",
+            bg=Palette.WINDOW,
+            fg=Palette.TEXT,
+            font=(FONT_UI, 10, "bold"),
+            justify=tk.LEFT,
+            anchor=tk.W,
+            wraplength=650,
+        ).grid(row=0, column=0, sticky="ew")
+        tk.Label(
+            body,
+            text=error,
+            bg=Palette.WINDOW,
+            fg=Palette.DANGER,
+            font=(FONT_UI, 9),
+            justify=tk.LEFT,
+            anchor=tk.W,
+            wraplength=650,
+        ).grid(row=1, column=0, sticky="ew", pady=(10, 10))
+
+        details_box = tk.Text(
+            body,
+            height=8,
+            wrap=tk.WORD,
+            font=("Cascadia Mono", 9),
+            bg=Palette.SURFACE_ALT,
+            fg=Palette.TEXT_SECONDARY,
+            selectbackground=Palette.ACCENT_SOFT,
+            relief=tk.FLAT,
+            padx=12,
+            pady=10,
+        )
+        details_box.grid(row=2, column=0, sticky="nsew")
+        details_box.insert("1.0", details)
+        details_box.configure(state=tk.DISABLED)
+
+        buttons = tk.Frame(dialog, bg=Palette.SURFACE, padx=24, pady=13)
+        buttons.grid(row=2, column=0, sticky="ew")
+        ttk.Button(
+            buttons,
+            text="复制错误详情",
+            style="Secondary.TButton",
+            command=self._copy_export_error_details,
+        ).pack(side=tk.LEFT)
+        ttk.Button(
+            buttons,
+            text="关闭",
+            style="Primary.TButton",
+            command=self._close_export_error_dialog,
+        ).pack(side=tk.RIGHT)
+        dialog.after_idle(dialog.focus_force)
+
+    def _copy_export_error_details(self):
+        self.root.clipboard_clear()
+        self.root.clipboard_append(self._export_error_details)
+        self.root.update_idletasks()
+        self._set_status("错误详情已复制，可直接粘贴反馈", tone="info")
+
+    def _close_export_error_dialog(self):
+        if self._export_error_dialog and self._export_error_dialog.winfo_exists():
+            self._export_error_dialog.destroy()
+        self._export_error_dialog = None
+
+    def _on_batch_export_complete(self, count, output_dir: str, failures=None):
+        self._finish_export_activity()
+        super()._on_batch_export_complete(count, output_dir, failures)
+
+    def _on_batch_export_failed(self, error: str, details: str = "", output_dir: str = ""):
+        self._finish_export_activity()
+        self._set_status("批量导出未完成 · 已成功写出的文件会保留", tone="danger")
+        self._show_export_failure(
+            "批量导出",
+            format_label(self._selected_format_id()),
+            output_dir or "未生成目标目录",
+            error,
+            details or error,
+        )
 
     def _after_export(self, path):
         if not path:
@@ -701,7 +930,7 @@ class ChatExporterGUI(BaseChineseGUI):
         self._configure_wide_scrollbar_style()
         retheme_widgets(self.root, mapping)
         retheme_combobox_popdowns(self.root)
-        for dialog in (self._key_dialog,):
+        for dialog in (self._key_dialog, self._export_error_dialog):
             if dialog and dialog.winfo_exists():
                 retheme_widgets(dialog, mapping)
                 retheme_combobox_popdowns(dialog)

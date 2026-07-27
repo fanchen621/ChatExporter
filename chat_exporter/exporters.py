@@ -16,6 +16,7 @@ from __future__ import annotations
 import html
 import json
 import os
+import tempfile
 from datetime import date, datetime
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -57,9 +58,32 @@ class BaseExporter:
     def export(self, conv: Conversation, path: Optional[str] = None) -> str:
         content = self.render(conv)
         if path:
-            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-            with open(path, "w", encoding="utf-8") as handle:
-                handle.write(content)
+            target = os.path.abspath(path)
+            folder = os.path.dirname(target)
+            os.makedirs(folder, exist_ok=True)
+
+            # 先写同目录临时文件，再原子替换。渲染或写盘失败时，旧文件保持原样，
+            # 也不会留下一份看似成功、实际只写了一半的导出文件。
+            fd, temp_path = tempfile.mkstemp(
+                prefix=f".{os.path.basename(target)}.",
+                suffix=".tmp",
+                dir=folder,
+                text=True,
+            )
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+                    handle.write(content)
+                os.replace(temp_path, target)
+            except Exception:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+                raise
         return content
 
     # 供 GUI 生成默认文件名用，四种格式共用一套规则。

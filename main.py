@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""ChatExporter 中文桌面应用入口。"""
+"""ChatExporter customer-facing desktop application entry."""
 
-from chat_exporter.gui_cn_v3 import run
+from chat_exporter.gui_product import run
 
 
 if __name__ == "__main__":

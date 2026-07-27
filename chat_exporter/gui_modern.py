@@ -717,7 +717,10 @@ class ChatExporterGUI:
         for display_index, (source_index, conv) in enumerate(matches[start:end], start=start):
             updated = conv.updated_at.strftime("%Y-%m-%d %H:%M") if conv.updated_at else "—"
             count = conv.metadata.get("msg_count") if conv.metadata else None
-            if count is None:
+            count_known = bool(conv.metadata.get("msg_count_known", True)) if conv.metadata else True
+            if not count_known:
+                count = "—"
+            elif count is None:
                 count = len(conv.messages)
             title = conv.title or "(Untitled conversation)"
             if len(title) > 62:

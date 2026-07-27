@@ -195,6 +195,14 @@ class HtmlBackendTests(unittest.TestCase):
         html = render_html("1. 顶层\n   3. 嵌套")
         self.assertIn('<ol><li>顶层<ol start="3"><li>嵌套</li></ol></li></ol>', html)
 
+    def test_indented_ordered_list_without_parent_is_repaired(self):
+        """脏数据里只有缩进项时也应生成合法 HTML，不能让整条导出崩掉。"""
+        html = render_html("   3. 孤立项\n   4. 下一项")
+        self.assertEqual(
+            html,
+            '<ol><li><ol start="3"><li>孤立项</li><li>下一项</li></ol></li></ol>',
+        )
+
     def test_empty_fence_language_survives_between_paragraphs(self):
         html = render_html("说明如下。\n\n```python\n```\n\n结束。")
         self.assertIn('<span class="lang">python</span>', html)

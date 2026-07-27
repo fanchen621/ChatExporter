@@ -346,15 +346,19 @@ def _render_table(rows: Sequence[Line]) -> str:
 
 def _render_list(items: Sequence[Line], ordered: bool) -> str:
     """一级嵌套的列表，并保留有序列表原始编号。"""
+    if not items:
+        return ""
     tag = "ol" if ordered else "ul"
 
-    def number(item: Line) -> int | None:
-        if not ordered or not item.number:
+    def number(item: Line | None) -> int | None:
+        # 真实对话里会出现只有缩进项、没有父项的残缺 Markdown。
+        # first_top 此时是 None，导出必须修复结构而不是让整条对话失败。
+        if not ordered or item is None or not item.number:
             return None
         return int(item.number)
 
     def open_tag(item: Line | None) -> str:
-        value = number(item) if item is not None else None
+        value = number(item)
         if not ordered or value in (None, 1):
             return f"<{tag}>"
         return f'<ol start="{value}">'

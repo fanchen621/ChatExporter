@@ -431,7 +431,11 @@ class ChatExporterGUI(BaseChineseGUI):
         if mode == "消息最多":
             return sorted(
                 matches,
-                key=lambda pair: (pair[1].metadata.get("msg_count", len(pair[1].messages)) if pair[1].metadata else len(pair[1].messages)),
+                key=lambda pair: (
+                    int(pair[1].metadata.get("msg_count") or 0)
+                    if pair[1].metadata
+                    else len(pair[1].messages)
+                ),
                 reverse=True,
             )
         if mode == "标题排序":

@@ -117,6 +117,19 @@ def test_html_escapes_closing_tags_inside_tool_output():
     assert "&lt;/details&gt;" in out
 
 
+def test_html_export_survives_indented_numbered_list_without_parent():
+    conv = make_conv()
+    text = "   1. 第一项\n   2. 第二项"
+    conv.messages[0].content = text
+    conv.messages[0].parts = [MessagePart(type=MessagePartType.TEXT, content=text)]
+
+    out = HtmlExporter().render(conv)
+
+    assert "第一项" in out
+    assert "第二项" in out
+    assert "<ol>" in out
+
+
 def test_html_is_self_contained_and_theme_aware():
     out = HtmlExporter().render(make_conv())
 
@@ -305,6 +318,22 @@ def test_export_creates_missing_directories(tmp_path):
     path = tmp_path / "a" / "b" / "out.html"
     export_conversation(make_conv(), str(path), "html")
     assert path.exists()
+
+
+def test_export_is_atomic_when_replace_fails(tmp_path, monkeypatch):
+    path = tmp_path / "existing.html"
+    path.write_text("旧内容", encoding="utf-8")
+
+    def fail_replace(_source, _target):
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(exporters.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="replace failed"):
+        HtmlExporter().export(make_conv(), str(path))
+
+    assert path.read_text(encoding="utf-8") == "旧内容"
+    assert list(tmp_path.glob(".existing.html.*.tmp")) == []
 
 
 # ============================================================================

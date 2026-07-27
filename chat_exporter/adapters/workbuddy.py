@@ -1,18 +1,34 @@
 import json
+import hashlib
+import mmap
 import os
 import re
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
 from .base import BaseAdapter
 from ..models import AppInfo, Conversation, Message, MessagePart, MessagePartType, Role
-from ..preview_utils import role_from_hint
+from ..preview_runtime import PreviewWindow
+from ..preview_utils import PREVIEW_FULL, effective_role, message_preview_text, role_from_hint
+from ..task_runtime import TaskCancelled, TaskContext
 
 
 class WorkBuddyAdapter(BaseAdapter):
     name = "workbuddy"
     display_name = "WorkBuddy"
+    _COUNT_CACHE_VERSION = 1
+    _COUNT_MARKERS = (
+        b'"type":"message"',
+        b'"type": "message"',
+        b'"type":"reasoning"',
+        b'"type": "reasoning"',
+        b'"type":"function_call"',
+        b'"type": "function_call"',
+        b'"type":"function_call_result"',
+        b'"type": "function_call_result"',
+    )
 
     def __init__(self):
         super().__init__()
@@ -21,7 +37,132 @@ class WorkBuddyAdapter(BaseAdapter):
         self._db_path = None
         self._sessions_json_path = None
         self._cached_conversations = None
+        self._jsonl_path_cache = {}
+        self._fallback_jsonl_index = None
+        # The library opens immediately from SQLite metadata. Counts are reused
+        # from a fingerprinted local cache, and only missing/stale files are
+        # counted in a cancellable background task started by the product UI.
+        self._message_count_cache = {}
+        self._message_count_signatures = {}
+        self._message_count_lock = threading.RLock()
+        self._message_count_cache_path = os.path.join(
+            self.appdata_local,
+            "ChatExporter",
+            "workbuddy_message_counts.json",
+        )
+        self._persistent_message_counts = {}
+        self._active_message_count_keys = None
+        self._load_message_count_cache()
         self._find_paths()
+
+    @staticmethod
+    def _message_count_key(path: str) -> str:
+        normalized = os.path.normcase(os.path.abspath(path))
+        return hashlib.sha256(normalized.encode("utf-8", errors="surrogatepass")).hexdigest()
+
+    @staticmethod
+    def _message_count_signature(path: str):
+        try:
+            stat = os.stat(path)
+        except OSError:
+            return None
+        return int(stat.st_size), int(stat.st_mtime_ns)
+
+    def _load_message_count_cache(self) -> None:
+        try:
+            with open(self._message_count_cache_path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except (OSError, ValueError, TypeError):
+            return
+        if payload.get("version") != self._COUNT_CACHE_VERSION:
+            return
+        entries = payload.get("entries")
+        if not isinstance(entries, dict):
+            return
+        clean = {}
+        for key, record in entries.items():
+            if not isinstance(key, str) or not isinstance(record, dict):
+                continue
+            try:
+                clean[key] = {
+                    "size": int(record["size"]),
+                    "mtime_ns": int(record["mtime_ns"]),
+                    "count": max(0, int(record["count"])),
+                }
+            except (KeyError, TypeError, ValueError):
+                continue
+        self._persistent_message_counts = clean
+
+    def _save_message_count_cache(self) -> None:
+        with self._message_count_lock:
+            if self._active_message_count_keys is not None:
+                self._persistent_message_counts = {
+                    key: record
+                    for key, record in self._persistent_message_counts.items()
+                    if key in self._active_message_count_keys
+                }
+            payload = {
+                "version": self._COUNT_CACHE_VERSION,
+                "entries": dict(self._persistent_message_counts),
+            }
+            folder = os.path.dirname(self._message_count_cache_path)
+            os.makedirs(folder, exist_ok=True)
+            temp_path = (
+                f"{self._message_count_cache_path}.{os.getpid()}."
+                f"{threading.get_ident()}.tmp"
+            )
+            try:
+                with open(temp_path, "w", encoding="utf-8", newline="\n") as handle:
+                    json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"))
+                os.replace(temp_path, self._message_count_cache_path)
+            finally:
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+
+    def _cached_message_count(self, path: Optional[str]) -> Optional[int]:
+        if not path:
+            return None
+        signature = self._message_count_signature(path)
+        if signature is None:
+            return None
+        with self._message_count_lock:
+            if self._message_count_signatures.get(path) == signature:
+                cached = self._message_count_cache.get(path)
+                if cached is not None:
+                    return int(cached)
+            key = self._message_count_key(path)
+            record = self._persistent_message_counts.get(key)
+            if record and (record.get("size"), record.get("mtime_ns")) == signature:
+                count = int(record["count"])
+                self._message_count_cache[path] = count
+                self._message_count_signatures[path] = signature
+                return count
+        return None
+
+    def _remember_message_count(self, path: str, count: int, persist: bool = False) -> int:
+        signature = self._message_count_signature(path)
+        value = max(0, int(count))
+        if signature is None:
+            return value
+        key = self._message_count_key(path)
+        with self._message_count_lock:
+            self._message_count_cache[path] = value
+            self._message_count_signatures[path] = signature
+            self._persistent_message_counts[key] = {
+                "size": signature[0],
+                "mtime_ns": signature[1],
+                "count": value,
+            }
+        if persist:
+            try:
+                self._save_message_count_cache()
+            except OSError:
+                # Count caching is an acceleration layer, never a prerequisite
+                # for reading or exporting the user's conversation.
+                pass
+        return value
 
     def _probe_root(self, wb_dir: str):
         """Given a candidate .workbuddy dir, return (db_path, projects_dir,
@@ -164,6 +305,13 @@ class WorkBuddyAdapter(BaseAdapter):
             self._find_paths()
         return self._db_path is not None and os.path.exists(self._db_path)
 
+    def reset_runtime_cache(self) -> None:
+        """Refresh library metadata while retaining valid fingerprinted counts."""
+        self._cached_conversations = None
+        self._jsonl_path_cache.clear()
+        self._fallback_jsonl_index = None
+        self._active_message_count_keys = None
+
     def get_app_info(self) -> AppInfo:
         available = self.detect()
         return AppInfo(
@@ -192,23 +340,25 @@ class WorkBuddyAdapter(BaseAdapter):
             return []
 
         conn = self._connect_db(self._db_path)
-        cursor = conn.cursor()
-
         try:
-            cursor.execute("""
-            SELECT id, title, cwd, model, status, created_at, updated_at
-            FROM sessions
-            WHERE deleted_at IS NULL
-            ORDER BY updated_at DESC
-        """)
+            rows = conn.execute("""
+                SELECT id, title, cwd, model, status, created_at, updated_at
+                FROM sessions
+                WHERE deleted_at IS NULL
+                ORDER BY updated_at DESC
+            """).fetchall()
         except Exception:
-            conn.close()
             return []
+        finally:
+            conn.close()
 
         conversations = []
-        for row in cursor.fetchall():
+        active_count_keys = set()
+        for row in rows:
             jsonl_path = self._find_jsonl_path(row["id"], row["cwd"])
-            msg_count = self._count_jsonl_messages(jsonl_path)
+            if jsonl_path:
+                active_count_keys.add(self._message_count_key(jsonl_path))
+            cached_count = self._cached_message_count(jsonl_path)
             conv = Conversation(
                 id=row["id"],
                 title=self._clean_title(row["title"]),
@@ -219,13 +369,13 @@ class WorkBuddyAdapter(BaseAdapter):
                     "cwd": row["cwd"],
                     "model": row["model"],
                     "status": row["status"],
-                    "msg_count": msg_count,
+                    "msg_count": cached_count or 0,
+                    "msg_count_known": cached_count is not None,
                     "jsonl_path": jsonl_path,
                 }
             )
             conversations.append(conv)
-
-        conn.close()
+        self._active_message_count_keys = active_count_keys
 
         # 按更新时间降序排列
         conversations.sort(key=lambda c: c.updated_at or datetime.min, reverse=True)
@@ -294,7 +444,11 @@ class WorkBuddyAdapter(BaseAdapter):
             pass
         return "(无标题对话)"
 
-    def _count_jsonl_messages(self, jsonl_path: Optional[str]) -> int:
+    def _count_jsonl_messages(
+        self,
+        jsonl_path: Optional[str],
+        context: Optional[TaskContext] = None,
+    ) -> int:
         """统计 jsonl 文件中的有效消息记录数。
 
         使用快速字符串匹配，只计数 type 为 message/reasoning/function_call/
@@ -302,41 +456,93 @@ class WorkBuddyAdapter(BaseAdapter):
         """
         if not jsonl_path or not os.path.exists(jsonl_path):
             return 0
-        # 已知的记录类型（与 _parse_record 中处理的类型一致）
-        known_types = ('"type":"message"', '"type": "message"',
-                       '"type":"reasoning"', '"type": "reasoning"',
-                       '"type":"function_call"', '"type": "function_call"',
-                       '"type":"function_call_result"', '"type": "function_call_result"')
+        count = 0
         try:
-            count = 0
-            with open(jsonl_path, "r", encoding="utf-8", errors="replace") as f:
-                for line in f:
-                    line = line.strip()
+            with open(jsonl_path, "rb") as f:
+                for line_number, line in enumerate(f, start=1):
+                    if context and line_number % 2048 == 0:
+                        context.check_cancelled()
                     if not line:
                         continue
-                    # 快速匹配已知类型，避免完整 JSON 解析
-                    if any(t in line for t in known_types):
+                    # 二进制匹配避免 60MB+ 文件逐行 UTF-8 解码与 JSON 解析。
+                    if any(marker in line for marker in self._COUNT_MARKERS):
                         count += 1
-            return count
-        except Exception:
-            return 0
+        except TaskCancelled:
+            raise
+        except OSError as exc:
+            raise RuntimeError(f"无法统计 WorkBuddy 消息数：{exc}") from exc
+        return count
+
+    def get_message_count(
+        self,
+        conversation: Conversation,
+        context: Optional[TaskContext] = None,
+    ) -> int:
+        """Return an exact source-record count without blocking library load."""
+        metadata = conversation.metadata or {}
+        path = metadata.get("jsonl_path")
+        if not path:
+            path = self._find_jsonl_path(str(conversation.id), metadata.get("cwd", ""))
+            metadata["jsonl_path"] = path
+            conversation.metadata = metadata
+
+        cached = self._cached_message_count(path)
+        if cached is None:
+            if context:
+                context.check_cancelled()
+            cached = self._count_jsonl_messages(path, context=context)
+            if path:
+                self._remember_message_count(path, cached)
+
+        metadata["msg_count"] = int(cached)
+        metadata["msg_count_known"] = True
+        conversation.metadata = metadata
+        return int(cached)
+
+    def flush_message_count_cache(self) -> None:
+        """Persist all counts learned by the background hydration pass."""
+        try:
+            self._save_message_count_cache()
+        except OSError:
+            pass
 
     def _find_jsonl_path(self, session_id: str, cwd: str) -> Optional[str]:
         if not self._projects_dir or not cwd:
             return None
 
+        cached = self._jsonl_path_cache.get(str(session_id))
+        if cached and os.path.exists(cached):
+            return cached
+
         slug = self._cwd_to_slug(cwd)
         candidate = os.path.join(self._projects_dir, slug, f"{session_id}.jsonl")
         if os.path.exists(candidate):
+            self._jsonl_path_cache[str(session_id)] = candidate
             return candidate
 
-        if os.path.exists(self._projects_dir):
-            for dirname in os.listdir(self._projects_dir):
-                dirpath = os.path.join(self._projects_dir, dirname)
-                if os.path.isdir(dirpath):
-                    cand = os.path.join(dirpath, f"{session_id}.jsonl")
-                    if os.path.exists(cand):
-                        return cand
+        if self._fallback_jsonl_index is None:
+            index = {}
+            try:
+                project_dirs = tuple(os.scandir(self._projects_dir))
+            except OSError:
+                project_dirs = ()
+            for directory in project_dirs:
+                if not directory.is_dir():
+                    continue
+                try:
+                    files = os.scandir(directory.path)
+                except OSError:
+                    continue
+                with files:
+                    for item in files:
+                        if item.is_file() and item.name.endswith(".jsonl"):
+                            index.setdefault(item.name[:-6], item.path)
+            self._fallback_jsonl_index = index
+
+        fallback = self._fallback_jsonl_index.get(str(session_id))
+        if fallback:
+            self._jsonl_path_cache[str(session_id)] = fallback
+            return fallback
 
         return None
 
@@ -359,7 +565,17 @@ class WorkBuddyAdapter(BaseAdapter):
             # DB 中有记录 → 用 DB 元数据 + jsonl 内容
             jsonl_path = self._find_jsonl_path(conv_id, sess_row["cwd"])
             messages = self._parse_jsonl(jsonl_path) if jsonl_path and os.path.exists(jsonl_path) else []
-            return Conversation(
+            source_count = self._cached_message_count(jsonl_path)
+            if source_count is None:
+                try:
+                    source_count = self._count_jsonl_messages(jsonl_path)
+                except RuntimeError:
+                    # Full conversation access must remain available even if
+                    # the optional count pass loses a race with file rotation.
+                    source_count = len(messages)
+                if jsonl_path:
+                    self._remember_message_count(jsonl_path, source_count, persist=True)
+            loaded = Conversation(
                 id=sess_row["id"],
                 title=self._clean_title(sess_row["title"]),
                 created_at=self._ts_to_dt(sess_row["created_at"], ms=True),
@@ -367,8 +583,20 @@ class WorkBuddyAdapter(BaseAdapter):
                 messages=messages,
                 model=sess_row["model"],
                 source_app=self.display_name,
-                metadata={"cwd": sess_row["cwd"], "jsonl_path": jsonl_path}
+                metadata={
+                    "cwd": sess_row["cwd"],
+                    "jsonl_path": jsonl_path,
+                    "msg_count": source_count,
+                    "msg_count_known": True,
+                }
             )
+            if self._cached_conversations:
+                for stub in self._cached_conversations:
+                    if str(stub.id) == str(conv_id):
+                        stub.metadata["msg_count"] = source_count
+                        stub.metadata["msg_count_known"] = True
+                        break
+            return loaded
 
         # DB 中没有该会话：在"单一真实数据根"设计下，这表示该会话
         # 对 WorkBuddy 自身也不可见（已删除 / 孤儿残留），不应再像旧版
@@ -379,6 +607,165 @@ class WorkBuddyAdapter(BaseAdapter):
         # 注：旧实现此处调用了未定义的 _load_sessions_json() / _parse_iso_dt()，
         # 一旦命中会抛 AttributeError。现已移除该死代码。
         return None
+
+    @staticmethod
+    def _iter_jsonl_reverse(path: str, end_offset: Optional[int] = None):
+        """Yield complete JSONL records backwards without reading the whole file."""
+        with open(path, "rb") as handle:
+            size = os.fstat(handle.fileno()).st_size
+            if size <= 0:
+                return
+            with mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ) as mapped:
+                position = size if end_offset is None else max(0, min(size, int(end_offset)))
+                while position > 0:
+                    while position > 0 and mapped[position - 1] in (10, 13):
+                        position -= 1
+                    if position <= 0:
+                        break
+                    line_end = position
+                    newline = mapped.rfind(b"\n", 0, position)
+                    line_start = newline + 1
+                    raw = mapped[line_start:line_end].rstrip(b"\r")
+                    position = line_start
+                    if raw:
+                        yield line_start, line_end, raw
+
+    @staticmethod
+    def _iter_jsonl_forward(path: str, start_offset: int = 0):
+        """Yield complete JSONL records forwards from a known line boundary."""
+        with open(path, "rb") as handle:
+            size = os.fstat(handle.fileno()).st_size
+            position = max(0, min(size, int(start_offset or 0)))
+            handle.seek(position)
+            while True:
+                line_start = handle.tell()
+                raw = handle.readline()
+                if not raw:
+                    break
+                line_end = handle.tell()
+                raw = raw.rstrip(b"\r\n")
+                if raw:
+                    yield line_start, line_end, raw
+
+    def get_preview_window(
+        self,
+        conv_id: str,
+        *,
+        limit: int = 180,
+        anchor: str = "latest",
+        cursor: Optional[int] = None,
+        mode: str = PREVIEW_FULL,
+        context: Optional[TaskContext] = None,
+    ) -> PreviewWindow:
+        """Read one preview window from JSONL without parsing the full archive.
+
+        WorkBuddy sessions can exceed tens of megabytes.  The library and
+        preview should become usable immediately; full parsing is deferred to
+        export or full-text indexing, where completeness actually matters.
+        """
+        if not self.detect():
+            raise RuntimeError("WorkBuddy 数据目录不可用")
+        conn = self._connect_db(self._db_path)
+        try:
+            row = conn.execute(
+                """
+                SELECT id, title, cwd, model, created_at, updated_at
+                FROM sessions
+                WHERE id = ? AND deleted_at IS NULL
+                """,
+                (conv_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            raise RuntimeError("WorkBuddy 中已找不到这条对话")
+        path = self._find_jsonl_path(conv_id, row["cwd"])
+        if not path or not os.path.exists(path):
+            raise RuntimeError("WorkBuddy 对话文件不存在")
+
+        file_size = os.path.getsize(path)
+        limit = max(20, min(500, int(limit)))
+        messages = []
+        visible_count = 0
+        scanned = 0
+
+        def accept(raw: bytes) -> Optional[Message]:
+            nonlocal scanned, visible_count
+            scanned += 1
+            if context and scanned % 64 == 0:
+                context.check_cancelled()
+            try:
+                record = json.loads(raw.decode("utf-8", errors="replace"))
+            except (json.JSONDecodeError, UnicodeError):
+                return None
+            message = self._parse_record(record)
+            if not message or (not message.content and not message.parts):
+                return None
+            role = effective_role(message)
+            if role in (Role.USER, Role.ASSISTANT) and message_preview_text(
+                message,
+                source_app=self.display_name,
+                mode=PREVIEW_FULL,
+            ):
+                visible_count += 1
+            return message
+
+        if anchor in ("earliest", "newer"):
+            start_offset = 0 if anchor == "earliest" else int(cursor or 0)
+            cursor_before = start_offset
+            cursor_after = start_offset
+            for _start, end, raw in self._iter_jsonl_forward(path, start_offset):
+                message = accept(raw)
+                cursor_after = end
+                if message is not None:
+                    messages.append(message)
+                if visible_count >= limit:
+                    break
+            has_older = cursor_before > 0
+            has_newer = cursor_after < file_size
+            label = f"最早 {visible_count} 条" if anchor == "earliest" else f"{visible_count} 条"
+        else:
+            end_offset = file_size if anchor == "latest" else int(cursor or file_size)
+            cursor_after = end_offset
+            cursor_before = end_offset
+            reverse_messages = []
+            for start, _end, raw in self._iter_jsonl_reverse(path, end_offset):
+                message = accept(raw)
+                cursor_before = start
+                if message is not None:
+                    reverse_messages.append(message)
+                if visible_count >= limit:
+                    break
+            messages = list(reversed(reverse_messages))
+            has_older = cursor_before > 0
+            has_newer = cursor_after < file_size
+            label = f"最近 {visible_count} 条" if anchor == "latest" else f"{visible_count} 条"
+
+        conversation = Conversation(
+            id=row["id"],
+            title=self._clean_title(row["title"]),
+            created_at=self._ts_to_dt(row["created_at"], ms=True),
+            updated_at=self._ts_to_dt(row["updated_at"], ms=True),
+            messages=messages,
+            model=row["model"],
+            source_app=self.display_name,
+            metadata={
+                "cwd": row["cwd"],
+                "jsonl_path": path,
+                "preview_partial": True,
+                "preview_scanned_records": scanned,
+            },
+        )
+        total_hint = int(self._cached_message_count(path) or 0)
+        return PreviewWindow(
+            conversation=conversation,
+            cursor_before=cursor_before,
+            cursor_after=cursor_after,
+            has_older=has_older,
+            has_newer=has_newer,
+            total_source_messages=total_hint,
+            label=label,
+        )
 
     def _parse_jsonl(self, path: str) -> List[Message]:
         messages = []
