@@ -321,8 +321,11 @@ def configure_styles(root: tk.Tk) -> ttk.Style:
     style.configure("Sidebar.TFrame", background=Palette.SIDEBAR)
     style.configure("SidebarRaised.TFrame", background=Palette.SIDEBAR_RAISED)
     style.configure("Toolbar.TFrame", background=Palette.SURFACE)
+    style.configure("CommandBar.TFrame", background=Palette.SURFACE_ALT)
     style.configure("Card.TFrame", background=Palette.SURFACE, relief="flat")
     style.configure("CardAlt.TFrame", background=Palette.SURFACE_ALT, relief="flat")
+    style.configure("SelectionBar.TFrame", background=Palette.ACCENT_SOFT, relief="flat")
+    style.configure("Overlay.TFrame", background=Palette.SURFACE)
 
     style.configure(
         "Brand.TLabel",
@@ -373,6 +376,37 @@ def configure_styles(root: tk.Tk) -> ttk.Style:
         font=(FONT_UI, 9),
     )
     style.configure(
+        "CommandHint.TLabel",
+        background=Palette.SURFACE_ALT,
+        foreground=Palette.TEXT_MUTED,
+        font=(FONT_UI, 9),
+    )
+    style.configure(
+        "Chip.TLabel",
+        background=Palette.ACCENT_SOFT,
+        foreground=Palette.ACCENT_PRESSED,
+        font=(FONT_UI, 8, "bold"),
+        padding=(8, 3),
+    )
+    style.configure(
+        "SelectionBar.TLabel",
+        background=Palette.ACCENT_SOFT,
+        foreground=Palette.ACCENT_PRESSED,
+        font=(FONT_UI, 9, "bold"),
+    )
+    style.configure(
+        "OverlayTitle.TLabel",
+        background=Palette.SURFACE,
+        foreground=Palette.TEXT,
+        font=(FONT_UI, 15, "bold"),
+    )
+    style.configure(
+        "OverlayBody.TLabel",
+        background=Palette.SURFACE,
+        foreground=Palette.TEXT_MUTED,
+        font=(FONT_UI, 9),
+    )
+    style.configure(
         "StatusBar.TLabel",
         background=Palette.SURFACE,
         foreground=Palette.TEXT_MUTED,
@@ -383,8 +417,8 @@ def configure_styles(root: tk.Tk) -> ttk.Style:
         font=(FONT_UI, 9),
         padding=(13, 8),
         relief="flat",
-        focusthickness=0,
-        focuscolor="none",
+        focusthickness=1,
+        focuscolor=Palette.ACCENT_SOFT,
     )
     style.configure(
         "Primary.TButton",
@@ -436,6 +470,63 @@ def configure_styles(root: tk.Tk) -> ttk.Style:
         "Ghost.TButton",
         background=[("pressed", Palette.SURFACE_PRESSED), ("active", Palette.SURFACE_HOVER)],
     )
+    compact_button = dict(
+        font=(FONT_UI, 9),
+        padding=(9, 5),
+        relief="flat",
+        focusthickness=1,
+        focuscolor=Palette.ACCENT_SOFT,
+    )
+    style.configure(
+        "Compact.TButton",
+        **compact_button,
+        borderwidth=0,
+        background=Palette.SURFACE,
+        foreground=Palette.TEXT_SECONDARY,
+    )
+    style.map(
+        "Compact.TButton",
+        background=[
+            ("pressed", Palette.SURFACE_PRESSED),
+            ("active", Palette.SURFACE_HOVER),
+            ("disabled", Palette.SURFACE),
+        ],
+        foreground=[("disabled", Palette.TEXT_DISABLED)],
+    )
+    style.configure(
+        "CompactSecondary.TButton",
+        **compact_button,
+        borderwidth=1,
+        background=Palette.SURFACE_ALT,
+        foreground=Palette.TEXT_SECONDARY,
+    )
+    style.map(
+        "CompactSecondary.TButton",
+        background=[
+            ("pressed", Palette.SURFACE_PRESSED),
+            ("active", Palette.SURFACE_HOVER),
+            ("disabled", Palette.SURFACE_ALT),
+        ],
+        foreground=[("disabled", Palette.TEXT_DISABLED)],
+    )
+    pager_button = dict(compact_button)
+    pager_button["padding"] = (8, 4)
+    style.configure(
+        "Pager.TButton",
+        **pager_button,
+        borderwidth=0,
+        background=Palette.SURFACE_ALT,
+        foreground=Palette.TEXT_SECONDARY,
+    )
+    style.map(
+        "Pager.TButton",
+        background=[
+            ("pressed", Palette.SURFACE_PRESSED),
+            ("active", Palette.SURFACE_HOVER),
+            ("disabled", Palette.SURFACE),
+        ],
+        foreground=[("disabled", Palette.TEXT_DISABLED)],
+    )
     style.configure(
         "Danger.TButton",
         **common_button,
@@ -443,6 +534,18 @@ def configure_styles(root: tk.Tk) -> ttk.Style:
         foreground=Palette.DANGER,
     )
     style.map("Danger.TButton", background=[("active", Palette.SURFACE_HOVER), ("pressed", Palette.SURFACE_PRESSED)])
+    style.configure(
+        "SelectionAction.TButton",
+        **compact_button,
+        borderwidth=0,
+        background=Palette.ACCENT_SOFT,
+        foreground=Palette.ACCENT_PRESSED,
+    )
+    style.map(
+        "SelectionAction.TButton",
+        background=[("active", Palette.ACCENT_SOFT_HOVER), ("pressed", Palette.ACCENT_SOFT_HOVER)],
+        foreground=[("disabled", Palette.TEXT_DISABLED)],
+    )
 
     style.configure(
         "Modern.TEntry",
@@ -465,7 +568,7 @@ def configure_styles(root: tk.Tk) -> ttk.Style:
     style.configure(
         "Modern.Treeview",
         font=(FONT_UI, 10),
-        rowheight=44,
+        rowheight=42,
         background=Palette.SURFACE,
         foreground=Palette.TEXT_SECONDARY,
         fieldbackground=Palette.SURFACE,
@@ -539,6 +642,27 @@ def configure_styles(root: tk.Tk) -> ttk.Style:
     )
     style.map(
         "TCombobox",
+        fieldbackground=[("readonly", Palette.SURFACE_ALT), ("disabled", Palette.SURFACE)],
+        foreground=[("readonly", Palette.TEXT), ("disabled", Palette.TEXT_DISABLED)],
+        background=[("readonly", Palette.SURFACE_ALT), ("active", Palette.SURFACE_ALT)],
+        arrowcolor=[("active", Palette.ACCENT)],
+        bordercolor=[("focus", Palette.ACCENT)],
+    )
+    style.configure(
+        "Compact.TCombobox",
+        fieldbackground=Palette.SURFACE_ALT,
+        background=Palette.SURFACE_ALT,
+        foreground=Palette.TEXT,
+        arrowcolor=Palette.TEXT_MUTED,
+        bordercolor=Palette.BORDER,
+        lightcolor=Palette.BORDER,
+        darkcolor=Palette.BORDER,
+        selectbackground=Palette.SURFACE_ALT,
+        selectforeground=Palette.TEXT,
+        padding=(7, 4),
+    )
+    style.map(
+        "Compact.TCombobox",
         fieldbackground=[("readonly", Palette.SURFACE_ALT), ("disabled", Palette.SURFACE)],
         foreground=[("readonly", Palette.TEXT), ("disabled", Palette.TEXT_DISABLED)],
         background=[("readonly", Palette.SURFACE_ALT), ("active", Palette.SURFACE_ALT)],
