@@ -29,6 +29,7 @@ def test_latest_preview_page_is_bounded_and_keeps_tail():
     assert page.entries[-1].text == "message-14999"
     assert page.has_older is True
     assert page.has_newer is False
+    assert page.label == "最近 160 条 · 共 15,000"
 
 
 def test_preview_page_navigation_uses_raw_cursor():
@@ -45,9 +46,21 @@ def test_preview_page_navigation_uses_raw_cursor():
     assert older.entries[0].text == "message-300"
     assert older.entries[-1].text == "message-399"
     assert older.has_newer is True
+    assert older.label == "301–400 · 共 500"
 
 
-def test_preview_payload_builds_segments_off_the_ui_thread_contract():
+def test_format_page_label_latest_and_earliest():
+    from chat_exporter.preview_runtime import format_page_label
+
+    assert format_page_label(
+        anchor="latest", start=820, end=1000, total=1000, visible_count=180
+    ) == "最近 180 条 · 共 1,000"
+    assert format_page_label(
+        anchor="earliest", start=0, end=180, total=1000, visible_count=180
+    ) == "最早 180 条 · 共 1,000"
+    assert format_page_label(
+        anchor="older", start=300, end=480, total=1000, visible_count=180
+    ) == "301–480 · 共 1,000"
     payload = build_preview_payload(_conversation(20), page_size=20, anchor="earliest")
 
     rendered = "".join(text for text, _tag in payload.segments)

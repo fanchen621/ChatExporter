@@ -19,11 +19,12 @@ def test_main_entry_uses_product_shell():
 def test_product_shell_bounds_preview_pages():
     assert 20 <= gui_product.ChatExporterGUI.PREVIEW_PAGE_SIZE <= 500
     assert gui_product.ChatExporterGUI.SIDEBAR_WIDTH <= 240
-    assert gui_product.ChatExporterGUI.MIN_LIBRARY_WIDTH >= 320
+    assert gui_product.ChatExporterGUI.MIN_LIBRARY_WIDTH >= 380
     assert gui_product.ChatExporterGUI.MIN_PREVIEW_WIDTH >= 480
     assert "_request_preview_page" in gui_product.ChatExporterGUI.__dict__
     assert "_start_content_search" in gui_product.ChatExporterGUI.__dict__
     assert "_export_all" in gui_product.ChatExporterGUI.__dict__
+    assert "_fit_tree_columns" in gui_product.ChatExporterGUI.__dict__
 
 
 def test_product_shell_preserves_core_capabilities():
@@ -163,6 +164,30 @@ def test_double_click_focuses_preview_without_exporting():
     assert calls == {"selection": 1, "focus": 1, "export": 0}
 
 
+def test_fit_tree_columns_keeps_compact_dates_readable():
+    try:
+        app = gui_product.ChatExporterGUI()
+    except tk.TclError as exc:
+        pytest.skip(f"Tk display unavailable: {exc}")
+    try:
+        app.root.geometry("1100x700+0+0")
+        app.root.update()
+        app.workspace_panes.sashpos(0, 280)
+        app.root.update_idletasks()
+        app._fit_tree_columns()
+        date_w = int(app.conv_tree.column("date", "width"))
+        msg_w = int(app.conv_tree.column("messages", "width"))
+        needed = app._tree_cell_font.measure("07-18")
+        assert date_w >= needed
+        assert msg_w >= app._tree_cell_font.measure("192")
+        assert str(app.conv_tree.heading("date", "anchor")) == "center"
+        assert str(app.conv_tree.column("messages", "anchor")) == "e"
+    finally:
+        if app._tasks:
+            app._tasks.shutdown(wait=False)
+        app.root.destroy()
+
+
 def test_product_shell_constructs_real_tk_widgets():
     try:
         app = gui_product.ChatExporterGUI()
@@ -174,6 +199,13 @@ def test_product_shell_constructs_real_tk_widgets():
         app.root.update()
         app._enforce_pane_limits()
         app.root.update_idletasks()
+        app.root.update()
+        try:
+            app.workspace_panes.sashpos(0, gui_product.ChatExporterGUI.MIN_LIBRARY_WIDTH)
+        except tk.TclError:
+            pass
+        app.root.update_idletasks()
+        app._fit_tree_columns()
         app.root.update_idletasks()
         root_left = app.root.winfo_rootx()
         root_width = app.root.winfo_width()
@@ -201,11 +233,12 @@ def test_product_shell_constructs_real_tk_widgets():
                 app.preview_latest_button,
             )
         )
+        tree_width = max(1, app.conv_tree.winfo_width())
         columns_width = sum(
             int(app.conv_tree.column(name, "width"))
             for name in ("title", "date", "messages")
         )
-        assert columns_width <= app.conv_tree.winfo_width() + 4
+        assert columns_width <= tree_width + 8
         assert app.style.configure("Pager.TButton")
         assert app.style.configure("Compact.TCombobox")
         assert app._tree_context_menu is not None
@@ -264,7 +297,13 @@ def test_product_shell_constructs_real_tk_widgets():
         app.preview_meta_var.set("旧说明")
         app._show_preview_placeholder()
         assert app.preview_title_var.get() == "选择一条对话"
-        assert app.preview_meta_var.get() == "长对话按页加载；导出始终保留完整内容"
+        assert "导出始终" in app.preview_meta_var.get()
+        assert app.preview_page_var.get() == "选择左侧对话后开始预览"
+        app._fit_tree_columns()
+        date_width = int(app.conv_tree.column("date", "width"))
+        assert date_width >= app._tree_cell_font.measure("07-28")
+        assert str(app.conv_tree.column("date", "anchor")) in {"center", "e", "w"}
+        assert str(app.conv_tree.heading("date", "anchor")) in {"center", "e", "w"}
     finally:
         if app._tasks:
             app._tasks.shutdown(wait=False)

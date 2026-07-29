@@ -27,7 +27,7 @@ class ChatExporterGUI(LegacyGUI):
     """Product shell: quiet visual hierarchy and bounded background work."""
 
     SIDEBAR_WIDTH = 220
-    MIN_LIBRARY_WIDTH = 360
+    MIN_LIBRARY_WIDTH = 400
     MIN_PREVIEW_WIDTH = 520
     PREVIEW_PAGE_SIZE = 180
     UI_QUEUE_POLL_MS = 75
@@ -747,17 +747,18 @@ class ChatExporterGUI(LegacyGUI):
             selectmode="extended",
             style="Modern.Treeview",
         )
-        self.conv_tree.heading("title", text="标题")
-        self.conv_tree.heading("date", text="更新")
-        self.conv_tree.heading("messages", text="消息")
-        self.conv_tree.column("title", width=160, minwidth=90)
-        self.conv_tree.column("date", width=64, minwidth=56, stretch=False)
-        self.conv_tree.column("messages", width=54, minwidth=50, stretch=False, anchor=tk.CENTER)
+        self.conv_tree.heading("title", text="标题", anchor=tk.W)
+        self.conv_tree.heading("date", text="更新", anchor=tk.CENTER)
+        self.conv_tree.heading("messages", text="消息", anchor=tk.E)
+        self.conv_tree.column("title", width=180, minwidth=96, anchor=tk.W, stretch=True)
+        self.conv_tree.column("date", width=78, minwidth=72, stretch=False, anchor=tk.CENTER)
+        self.conv_tree.column("messages", width=64, minwidth=54, stretch=False, anchor=tk.E)
         self.conv_tree.grid(row=0, column=0, sticky="nsew")
         scroll = ttk.Scrollbar(tree_wrap, orient=tk.VERTICAL, command=self.conv_tree.yview, style="Wide.Vertical.TScrollbar")
         scroll.grid(row=0, column=1, sticky="ns")
         self.conv_tree.configure(yscrollcommand=scroll.set)
         self.conv_tree.bind("<Configure>", self._fit_tree_columns, add="+")
+        self.root.after_idle(self._fit_tree_columns)
         self.conv_tree.bind("<<TreeviewSelect>>", self._on_tree_selection_changed, add="+")
         self.conv_tree.bind("<Double-1>", self._on_tree_double_click)
         self.conv_tree.bind("<Button-3>", self._show_tree_context_menu)
@@ -1002,20 +1003,64 @@ class ChatExporterGUI(LegacyGUI):
         self.root.after_idle(self._update_selection_summary)
 
     def _fit_tree_columns(self, _event=None):
+        """Keep 更新/消息 fully readable under DPI scale; title absorbs squeeze.
+
+        Fixed pixel guesses regress at 125%/150% (dates become ``07-1…``). Measure
+        the compact stamps we actually render instead.
+        """
         try:
             total = self.conv_tree.winfo_width()
         except tk.TclError:
             return
         if total <= 80:
             return
-        date_w = 72 if total >= 360 else 62
-        msg_w = 64 if total >= 360 else 54
-        self.conv_tree.column("title", width=max(90, total - date_w - msg_w - 4))
-        self.conv_tree.column("date", width=date_w)
-        self.conv_tree.column("messages", width=msg_w)
+        if not hasattr(self, "_tree_cell_font"):
+            import tkinter.font as tkfont
+
+            self._tree_cell_font = tkfont.Font(font=(FONT_UI, 10))
+            self._tree_head_font = tkfont.Font(font=(FONT_UI, 9, "bold"))
+        date_w = max(
+            self._tree_cell_font.measure("00-00-00"),
+            self._tree_head_font.measure("更新"),
+        ) + 28
+        msg_w = max(
+            self._tree_cell_font.measure("88888"),
+            self._tree_head_font.measure("消息"),
+        ) + 24
+        gutter = 10
+        reserved = date_w + msg_w + gutter
+        title_min = 96
+        if total < reserved + title_min:
+            # Extreme narrow panes: protect the date stamp first, then messages.
+            overflow = reserved + title_min - total
+            shrink_msg = min(max(0, msg_w - 48), overflow)
+            msg_w -= shrink_msg
+            overflow -= shrink_msg
+            if overflow > 0:
+                date_w = max(
+                    self._tree_cell_font.measure("00-00") + 20,
+                    date_w - overflow,
+                )
+            reserved = date_w + msg_w + gutter
+        title_w = max(title_min, total - reserved)
+        # Never let column mins overflow the widget; Treeview would clip dates again.
+        overflow = title_w + date_w + msg_w - total
+        if overflow > 0:
+            shrink_title = min(max(0, title_w - 72), overflow)
+            title_w -= shrink_title
+            overflow -= shrink_title
+            if overflow > 0:
+                shrink_msg = min(max(0, msg_w - 40), overflow)
+                msg_w -= shrink_msg
+                overflow -= shrink_msg
+            if overflow > 0:
+                date_w = max(self._tree_cell_font.measure("00-00") + 16, date_w - overflow)
+        self.conv_tree.column("title", width=title_w, minwidth=min(title_min, title_w), stretch=True, anchor=tk.W)
+        self.conv_tree.column("date", width=date_w, minwidth=min(date_w, date_w), stretch=False, anchor=tk.CENTER)
+        self.conv_tree.column("messages", width=msg_w, minwidth=min(40, msg_w), stretch=False, anchor=tk.E)
 
     def _build_preview_card(self, parent):
-        parent.grid_rowconfigure(3, weight=1)
+        parent.grid_rowconfigure(2, weight=1)
         parent.grid_columnconfigure(0, weight=1)
         self._apply_card_border(parent)
 
@@ -1052,7 +1097,7 @@ class ChatExporterGUI(LegacyGUI):
         )
         self.preview_find_field_frame = find_wrap
         find_wrap.grid(row=0, column=0, columnspan=4, sticky="ew")
-        self.preview_find_var = tk.StringVar(value="在当前页查找…")
+        self.preview_find_var = tk.StringVar(value="页内查找…")
         self.preview_find_entry = tk.Entry(
             find_wrap,
             textvariable=self.preview_find_var,
@@ -1098,32 +1143,44 @@ class ChatExporterGUI(LegacyGUI):
         self.clean_preview_var = tk.BooleanVar(
             value=bool(settings.get("clean_preview", False)) if settings is not None else False
         )
+        control_bar = ttk.Frame(toolbar, style="Surface.TFrame")
+        control_bar.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(8, 0))
+        control_bar.grid_columnconfigure(1, weight=1)
+
+        left_tools = ttk.Frame(control_bar, style="Surface.TFrame")
+        left_tools.grid(row=0, column=0, sticky="w")
         ttk.Checkbutton(
-            toolbar,
+            left_tools,
             text="只看对话",
             variable=self.clean_preview_var,
             command=self._on_clean_preview_toggled,
             style="Modern.TCheckbutton",
-        ).grid(row=1, column=2, sticky="e", padx=(0, 8), pady=(6, 0))
-        ttk.Button(toolbar, text="复制本页", style="Compact.TButton", command=self._copy_preview_text).grid(
-            row=1, column=3, sticky="e", pady=(6, 0)
-        )
-        ttk.Label(toolbar, text="当前预览页", style="Muted.TLabel").grid(
-            row=1, column=0, sticky="w", pady=(6, 0)
-        )
+        ).pack(side=tk.LEFT)
+        ttk.Button(
+            left_tools,
+            text="复制本页",
+            style="Compact.TButton",
+            command=self._copy_preview_text,
+        ).pack(side=tk.LEFT, padx=(12, 0))
 
-        navigation = ttk.Frame(parent, style="Surface.TFrame")
-        navigation.grid(row=2, column=0, sticky="ew", padx=18, pady=(0, 8))
-        navigation.grid_columnconfigure(0, weight=1)
-        self.preview_page_var = tk.StringVar(value="—")
-        page_info = ttk.Frame(navigation, style="Surface.TFrame")
-        page_info.grid(row=0, column=0, sticky="w")
-        ttk.Label(page_info, text="预览范围", style="Muted.TLabel").pack(side=tk.LEFT)
-        ttk.Label(page_info, textvariable=self.preview_page_var, style="Muted.TLabel").pack(side=tk.LEFT, padx=(6, 0))
-        ttk.Label(page_info, text="· 导出保持完整", style="Muted.TLabel").pack(side=tk.LEFT, padx=(6, 0))
+        self.preview_page_var = tk.StringVar(value="选择左侧对话后开始预览")
+        ttk.Label(
+            control_bar,
+            textvariable=self.preview_page_var,
+            style="Muted.TLabel",
+        ).grid(row=0, column=1, padx=(16, 12))
 
-        pager = ttk.Frame(navigation, style="Surface.TFrame")
-        pager.grid(row=0, column=1, sticky="e")
+        pager_shell = tk.Frame(
+            control_bar,
+            bg=Palette.SURFACE_ALT,
+            highlightbackground=Palette.BORDER,
+            highlightthickness=1,
+            padx=3,
+            pady=2,
+        )
+        pager_shell.grid(row=0, column=2, sticky="e")
+        pager = tk.Frame(pager_shell, bg=Palette.SURFACE_ALT)
+        pager.pack(side=tk.LEFT)
         self.preview_first_button = ttk.Button(
             pager,
             text="最早",
@@ -1153,12 +1210,12 @@ class ChatExporterGUI(LegacyGUI):
             command=lambda: self._request_preview_page("latest"),
         )
         self.preview_first_button.pack(side=tk.LEFT)
-        self.preview_older_button.pack(side=tk.LEFT, padx=(4, 4))
-        self.preview_newer_button.pack(side=tk.LEFT, padx=(0, 4))
-        self.preview_latest_button.pack(side=tk.LEFT)
+        self.preview_older_button.pack(side=tk.LEFT, padx=(2, 0))
+        self.preview_newer_button.pack(side=tk.LEFT, padx=(2, 0))
+        self.preview_latest_button.pack(side=tk.LEFT, padx=(2, 0))
 
         text_wrap = tk.Frame(parent, bg=Palette.SURFACE, bd=0)
-        text_wrap.grid(row=3, column=0, sticky="nsew", padx=1, pady=(0, 1))
+        text_wrap.grid(row=2, column=0, sticky="nsew", padx=1, pady=(0, 1))
         text_wrap.grid_rowconfigure(0, weight=1)
         text_wrap.grid_columnconfigure(0, weight=1)
         self.preview_text = tk.Text(
@@ -1370,7 +1427,7 @@ class ChatExporterGUI(LegacyGUI):
             frame.configure(highlightbackground=Palette.BORDER)
         if not self.preview_find_var.get().strip():
             self._preview_find_placeholder_active = True
-            self.preview_find_var.set("在当前页查找…")
+            self.preview_find_var.set("页内查找…")
             self.preview_find_entry.configure(fg=Palette.TEXT_DISABLED)
             self._reset_preview_find_marks()
 
@@ -1383,7 +1440,7 @@ class ChatExporterGUI(LegacyGUI):
 
     def _restore_preview_find_placeholder(self):
         self._preview_find_placeholder_active = True
-        self.preview_find_var.set("在当前页查找…")
+        self.preview_find_var.set("页内查找…")
         self.preview_find_entry.configure(fg=Palette.TEXT_DISABLED)
         self._reset_preview_find_marks()
 
@@ -1556,10 +1613,10 @@ class ChatExporterGUI(LegacyGUI):
         self._preview_plain_text = ""
         self._reset_preview_find_marks()
         self.preview_title_var.set("选择一条对话")
-        self.preview_meta_var.set("长对话按页加载；导出始终保留完整内容")
+        self.preview_meta_var.set("从左侧点选后可预览；导出始终完整")
         self._display_preview_state(
-            "选择一条对话",
-            "从左侧列表开始阅读。长对话按页加载，导出始终保留完整内容。",
+            "还没有选中对话",
+            "在左侧列表单击一条即可预览。\n长对话按页加载，导出始终保留完整内容。",
         )
         self.selected_conv = None
         self._sync_preview_pager()
@@ -1575,13 +1632,18 @@ class ChatExporterGUI(LegacyGUI):
         if not all(widgets):
             return
         page = self._preview_payload.page if self._preview_payload else None
-        disabled = self._preview_page_busy or page is None
+        if page is None:
+            for button in widgets:
+                button.configure(state=tk.DISABLED)
+            self.preview_page_var.set("选择左侧对话后开始预览")
+            return
+        disabled = self._preview_page_busy
         self.preview_first_button.configure(state=tk.DISABLED if disabled or not page.has_older else tk.NORMAL)
         self.preview_older_button.configure(state=tk.DISABLED if disabled or not page.has_older else tk.NORMAL)
         self.preview_newer_button.configure(state=tk.DISABLED if disabled or not page.has_newer else tk.NORMAL)
         self.preview_latest_button.configure(state=tk.DISABLED if disabled or not page.has_newer else tk.NORMAL)
-        if not page or not page.entries:
-            self.preview_page_var.set("—")
+        if not page.entries:
+            self.preview_page_var.set("本页无可见正文")
         elif page.label:
             self.preview_page_var.set(page.label)
         else:
