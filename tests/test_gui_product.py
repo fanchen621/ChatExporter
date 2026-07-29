@@ -298,7 +298,7 @@ def test_product_shell_constructs_real_tk_widgets():
         app._show_preview_placeholder()
         assert app.preview_title_var.get() == "选择一条对话"
         assert "导出始终" in app.preview_meta_var.get()
-        assert app.preview_page_var.get() == "尚未打开对话"
+        assert app.preview_page_var.get() == "选择左侧对话后开始预览"
         app._fit_tree_columns()
         date_width = int(app.conv_tree.column("date", "width"))
         assert date_width >= app._tree_cell_font.measure("07-28")

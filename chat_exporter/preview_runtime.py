@@ -103,6 +103,30 @@ def _clean_entries(conversation: Conversation) -> Tuple[Tuple[int, PreviewEntry]
     )
 
 
+def format_page_label(
+    *,
+    anchor: str,
+    start: int,
+    end: int,
+    total: int,
+    visible_count: int,
+) -> str:
+    """Human-readable preview position for the pager status line."""
+    if visible_count <= 0:
+        return "本页无可见正文"
+    if total > 0:
+        if anchor == "latest" and end >= total:
+            return f"最近 {visible_count} 条 · 共 {total:,}"
+        if anchor == "earliest" and start <= 0:
+            return f"最早 {visible_count} 条 · 共 {total:,}"
+        return f"{start + 1}–{end} · 共 {total:,}"
+    if anchor == "latest":
+        return f"最近 {visible_count} 条"
+    if anchor == "earliest":
+        return f"最早 {visible_count} 条"
+    return f"本页 {visible_count} 条"
+
+
 def build_preview_page(
     conversation: Conversation,
     *,
@@ -136,11 +160,18 @@ def build_preview_page(
         else:
             selected = pairs[-page_size:]
         if not selected:
-            return PreviewPage((), 0, 0, total, False, False, mode)
+            return PreviewPage((), 0, 0, total, False, False, mode, label="本页无可见正文")
         start = selected[0][0]
         end = selected[-1][0] + 1
         entries = tuple(pair[1] for pair in selected)
-        return PreviewPage(entries, start, end, total, start > 0, end < total, mode)
+        label = format_page_label(
+            anchor=anchor,
+            start=start,
+            end=end,
+            total=total,
+            visible_count=len(entries),
+        )
+        return PreviewPage(entries, start, end, total, start > 0, end < total, mode, label=label)
 
     def checked(indices: Iterable[int]) -> Tuple[Tuple[int, PreviewEntry], ...]:
         found = []
@@ -190,6 +221,13 @@ def build_preview_page(
         has_older=start > 0,
         has_newer=end < total,
         mode=mode,
+        label=format_page_label(
+            anchor=anchor,
+            start=start,
+            end=end,
+            total=total,
+            visible_count=len(entries),
+        ),
     )
 
 

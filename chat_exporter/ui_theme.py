@@ -510,12 +510,12 @@ def configure_styles(root: tk.Tk) -> ttk.Style:
         foreground=[("disabled", Palette.TEXT_DISABLED)],
     )
     pager_button = dict(compact_button)
-    pager_button["padding"] = (12, 6)
-    pager_button["relief"] = "solid"
+    pager_button["padding"] = (9, 4)
+    pager_button["relief"] = "flat"
     style.configure(
         "Pager.TButton",
         **pager_button,
-        borderwidth=1,
+        borderwidth=0,
         background=Palette.SURFACE_ALT,
         foreground=Palette.TEXT_SECONDARY,
     )
@@ -524,16 +524,11 @@ def configure_styles(root: tk.Tk) -> ttk.Style:
         background=[
             ("pressed", Palette.SURFACE_PRESSED),
             ("active", Palette.ACCENT_SOFT),
-            ("disabled", Palette.SURFACE),
+            ("disabled", Palette.SURFACE_ALT),
         ],
         foreground=[
             ("disabled", Palette.TEXT_DISABLED),
             ("active", Palette.TEXT),
-        ],
-        bordercolor=[
-            ("!disabled", Palette.BORDER_STRONG),
-            ("disabled", Palette.BORDER),
-            ("active", Palette.ACCENT),
         ],
     )
     style.configure(

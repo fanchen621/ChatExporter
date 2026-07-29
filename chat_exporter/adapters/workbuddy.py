@@ -723,7 +723,19 @@ class WorkBuddyAdapter(BaseAdapter):
                     break
             has_older = cursor_before > 0
             has_newer = cursor_after < file_size
-            label = f"最早 {visible_count} 条" if anchor == "earliest" else f"{visible_count} 条"
+            total_hint = int(self._cached_message_count(path) or 0)
+            if anchor == "earliest":
+                label = (
+                    f"最早 {visible_count} 条 · 共 {total_hint:,}"
+                    if total_hint
+                    else f"最早 {visible_count} 条"
+                )
+            else:
+                label = (
+                    f"{visible_count} 条 · 共 {total_hint:,}"
+                    if total_hint
+                    else f"{visible_count} 条"
+                )
         else:
             end_offset = file_size if anchor == "latest" else int(cursor or file_size)
             cursor_after = end_offset
@@ -739,7 +751,19 @@ class WorkBuddyAdapter(BaseAdapter):
             messages = list(reversed(reverse_messages))
             has_older = cursor_before > 0
             has_newer = cursor_after < file_size
-            label = f"最近 {visible_count} 条" if anchor == "latest" else f"{visible_count} 条"
+            total_hint = int(self._cached_message_count(path) or 0)
+            if anchor == "latest":
+                label = (
+                    f"最近 {visible_count} 条 · 共 {total_hint:,}"
+                    if total_hint
+                    else f"最近 {visible_count} 条"
+                )
+            else:
+                label = (
+                    f"{visible_count} 条 · 共 {total_hint:,}"
+                    if total_hint
+                    else f"{visible_count} 条"
+                )
 
         conversation = Conversation(
             id=row["id"],

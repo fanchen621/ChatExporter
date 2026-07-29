@@ -1060,7 +1060,7 @@ class ChatExporterGUI(LegacyGUI):
         self.conv_tree.column("messages", width=msg_w, minwidth=min(40, msg_w), stretch=False, anchor=tk.E)
 
     def _build_preview_card(self, parent):
-        parent.grid_rowconfigure(3, weight=1)
+        parent.grid_rowconfigure(2, weight=1)
         parent.grid_columnconfigure(0, weight=1)
         self._apply_card_border(parent)
 
@@ -1143,72 +1143,79 @@ class ChatExporterGUI(LegacyGUI):
         self.clean_preview_var = tk.BooleanVar(
             value=bool(settings.get("clean_preview", False)) if settings is not None else False
         )
-        preview_tools = ttk.Frame(toolbar, style="Surface.TFrame")
-        preview_tools.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(6, 0))
-        preview_tools.grid_columnconfigure(0, weight=1)
-        ttk.Label(preview_tools, text="预览工具", style="Muted.TLabel").grid(row=0, column=0, sticky="w")
-        tool_actions = ttk.Frame(preview_tools, style="Surface.TFrame")
-        tool_actions.grid(row=0, column=1, sticky="e")
+        control_bar = ttk.Frame(toolbar, style="Surface.TFrame")
+        control_bar.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(8, 0))
+        control_bar.grid_columnconfigure(1, weight=1)
+
+        left_tools = ttk.Frame(control_bar, style="Surface.TFrame")
+        left_tools.grid(row=0, column=0, sticky="w")
         ttk.Checkbutton(
-            tool_actions,
+            left_tools,
             text="只看对话",
             variable=self.clean_preview_var,
             command=self._on_clean_preview_toggled,
             style="Modern.TCheckbutton",
-        ).pack(side=tk.LEFT, padx=(0, 10))
+        ).pack(side=tk.LEFT)
         ttk.Button(
-            tool_actions,
+            left_tools,
             text="复制本页",
             style="Compact.TButton",
             command=self._copy_preview_text,
-        ).pack(side=tk.LEFT)
+        ).pack(side=tk.LEFT, padx=(12, 0))
 
-        navigation = ttk.Frame(parent, style="Surface.TFrame")
-        navigation.grid(row=2, column=0, sticky="ew", padx=18, pady=(0, 8))
-        navigation.grid_columnconfigure(0, weight=1)
-        self.preview_page_var = tk.StringVar(value="尚未打开对话")
-        page_info = ttk.Frame(navigation, style="Surface.TFrame")
-        page_info.grid(row=0, column=0, sticky="w")
-        ttk.Label(page_info, text="范围", style="Muted.TLabel").pack(side=tk.LEFT)
-        ttk.Label(page_info, textvariable=self.preview_page_var, style="Muted.TLabel").pack(side=tk.LEFT, padx=(6, 0))
+        self.preview_page_var = tk.StringVar(value="选择左侧对话后开始预览")
+        ttk.Label(
+            control_bar,
+            textvariable=self.preview_page_var,
+            style="Muted.TLabel",
+        ).grid(row=0, column=1, padx=(16, 12))
 
-        pager = ttk.Frame(navigation, style="Surface.TFrame")
-        pager.grid(row=0, column=1, sticky="e")
+        pager_shell = tk.Frame(
+            control_bar,
+            bg=Palette.SURFACE_ALT,
+            highlightbackground=Palette.BORDER,
+            highlightthickness=1,
+            padx=3,
+            pady=2,
+        )
+        pager_shell.grid(row=0, column=2, sticky="e")
+        pager = tk.Frame(pager_shell, bg=Palette.SURFACE_ALT)
+        pager.pack(side=tk.LEFT)
         self.preview_first_button = ttk.Button(
             pager,
             text="最早",
-            width=5,
+            width=4,
             style="Pager.TButton",
             command=lambda: self._request_preview_page("earliest"),
         )
         self.preview_older_button = ttk.Button(
             pager,
             text="上页",
-            width=5,
+            width=4,
             style="Pager.TButton",
             command=lambda: self._request_preview_page("older"),
         )
         self.preview_newer_button = ttk.Button(
             pager,
             text="下页",
-            width=5,
+            width=4,
             style="Pager.TButton",
             command=lambda: self._request_preview_page("newer"),
         )
         self.preview_latest_button = ttk.Button(
             pager,
             text="最新",
-            width=5,
+            width=4,
             style="Pager.TButton",
             command=lambda: self._request_preview_page("latest"),
         )
         self.preview_first_button.pack(side=tk.LEFT)
-        self.preview_older_button.pack(side=tk.LEFT, padx=(6, 6))
-        self.preview_newer_button.pack(side=tk.LEFT, padx=(0, 6))
-        self.preview_latest_button.pack(side=tk.LEFT)
+        self.preview_older_button.pack(side=tk.LEFT, padx=(2, 0))
+        self.preview_newer_button.pack(side=tk.LEFT, padx=(2, 0))
+        self.preview_latest_button.pack(side=tk.LEFT, padx=(2, 0))
 
         text_wrap = tk.Frame(parent, bg=Palette.SURFACE, bd=0)
-        text_wrap.grid(row=3, column=0, sticky="nsew", padx=1, pady=(0, 1))
+        text_wrap.grid(row=2, column=0, sticky="nsew", padx=1, pady=(0, 1))
         text_wrap.grid_rowconfigure(0, weight=1)
         text_wrap.grid_columnconfigure(0, weight=1)
         self.preview_text = tk.Text(
@@ -1628,7 +1635,7 @@ class ChatExporterGUI(LegacyGUI):
         if page is None:
             for button in widgets:
                 button.configure(state=tk.DISABLED)
-            self.preview_page_var.set("尚未打开对话")
+            self.preview_page_var.set("选择左侧对话后开始预览")
             return
         disabled = self._preview_page_busy
         self.preview_first_button.configure(state=tk.DISABLED if disabled or not page.has_older else tk.NORMAL)
