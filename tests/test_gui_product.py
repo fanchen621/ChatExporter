@@ -242,6 +242,9 @@ def test_product_shell_constructs_real_tk_widgets():
         assert app.style.configure("Pager.TButton")
         assert app.style.configure("Compact.TCombobox")
         assert app._tree_context_menu is not None
+        assert app.theme_button.cget("text") in {"浅色", "深色"}
+        assert "☀" not in app.theme_button.cget("text")
+        assert "🌙" not in app.theme_button.cget("text")
 
         first = Conversation(id="first", title="第一条")
         second = Conversation(id="second", title="第二条")
@@ -251,6 +254,14 @@ def test_product_shell_constructs_real_tk_widgets():
             app.conv_tree.delete(item)
         app.conv_tree.insert("", tk.END, iid="conv_0", values=("第一条", "07-28", "1"))
         app.conv_tree.insert("", tk.END, iid="conv_1", values=("第二条", "07-28", "1"))
+
+        app.root.update_idletasks()
+        first_bbox = app.conv_tree.bbox("conv_0")
+        assert first_bbox
+        app._on_tree_hover(SimpleNamespace(y=first_bbox[1] + 2))
+        assert "hover" in app.conv_tree.item("conv_0", "tags")
+        app._clear_tree_hover()
+        assert "hover" not in app.conv_tree.item("conv_0", "tags")
 
         app.conv_tree.selection_set("conv_0")
         app.conv_tree.focus("conv_0")
@@ -265,6 +276,11 @@ def test_product_shell_constructs_real_tk_widgets():
         assert app.batch_button.cget("text") == "导出选中 2 条"
         assert app.selection_summary_var.get() == "已选 2 条 · Esc 取消"
         assert app.selection_bar.winfo_ismapped()
+        assert {
+            int(child.grid_info()["row"])
+            for child in app.selection_bar.winfo_children()
+            if child.winfo_ismapped()
+        } == {0}
         selection_right = max(
             child.winfo_x() + child.winfo_width()
             for child in app.selection_bar.winfo_children()

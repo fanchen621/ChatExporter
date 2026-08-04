@@ -322,7 +322,15 @@ def configure_styles(root: tk.Tk) -> ttk.Style:
     style.configure("SidebarRaised.TFrame", background=Palette.SIDEBAR_RAISED)
     style.configure("Toolbar.TFrame", background=Palette.SURFACE)
     style.configure("CommandBar.TFrame", background=Palette.SURFACE_ALT)
-    style.configure("Card.TFrame", background=Palette.SURFACE, relief="flat")
+    style.configure(
+        "Card.TFrame",
+        background=Palette.SURFACE,
+        relief="solid",
+        borderwidth=1,
+        bordercolor=Palette.BORDER,
+        lightcolor=Palette.BORDER,
+        darkcolor=Palette.BORDER,
+    )
     style.configure("CardAlt.TFrame", background=Palette.SURFACE_ALT, relief="flat")
     style.configure("SelectionBar.TFrame", background=Palette.ACCENT_SOFT, relief="flat")
     style.configure("Overlay.TFrame", background=Palette.SURFACE)
@@ -349,13 +357,13 @@ def configure_styles(root: tk.Tk) -> ttk.Style:
         "PageTitle.TLabel",
         background=Palette.SURFACE,
         foreground=Palette.TEXT,
-        font=(FONT_UI, 17, "bold"),
+        font=(FONT_UI, 18, "bold"),
     )
     style.configure(
         "PageSub.TLabel",
         background=Palette.SURFACE,
         foreground=Palette.TEXT_MUTED,
-        font=(FONT_UI, 9),
+        font=(FONT_UI, 10),
     )
     style.configure(
         "CardTitle.TLabel",
@@ -404,7 +412,7 @@ def configure_styles(root: tk.Tk) -> ttk.Style:
         "OverlayBody.TLabel",
         background=Palette.SURFACE,
         foreground=Palette.TEXT_MUTED,
-        font=(FONT_UI, 9),
+        font=(FONT_UI, 10),
     )
     style.configure(
         "StatusBar.TLabel",
@@ -572,7 +580,7 @@ def configure_styles(root: tk.Tk) -> ttk.Style:
     style.configure(
         "Modern.Treeview",
         font=(FONT_UI, 10),
-        rowheight=42,
+        rowheight=44,
         background=Palette.SURFACE,
         foreground=Palette.TEXT_SECONDARY,
         fieldbackground=Palette.SURFACE,
@@ -586,7 +594,7 @@ def configure_styles(root: tk.Tk) -> ttk.Style:
         foreground=Palette.TEXT_MUTED,
         relief="flat",
         borderwidth=0,
-        padding=(10, 9),
+        padding=(10, 10),
     )
     style.map(
         "Modern.Treeview",
@@ -683,6 +691,8 @@ def configure_styles(root: tk.Tk) -> ttk.Style:
         background=Palette.SURFACE,
         foreground=Palette.TEXT_SECONDARY,
         font=(FONT_UI, 9),
+        focusthickness=1,
+        focuscolor=Palette.ACCENT_SOFT,
     )
     style.map("Modern.TCheckbutton", background=[("active", Palette.SURFACE)])
     return style
