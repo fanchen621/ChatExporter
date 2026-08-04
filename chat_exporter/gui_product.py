@@ -54,12 +54,14 @@ class ChatExporterGUI(LegacyGUI):
         self._preview_find_placeholder_active = True
         self._brand_image = None
         self._tree_context_menu = None
+        self._tree_hover_item = ""
         self._toast_after_id = None
         self._toast_frame = None
         self._preview_state_action = None
         super().__init__()
         self._tasks = UiTaskRunner(self._post_ui, max_workers=3)
         self.root.title("ChatExporter")
+        self.theme_button.configure(text="浅色" if self.theme_name == "dark" else "深色")
 
     # ------------------------------------------------------------------ shell
 
@@ -307,7 +309,7 @@ class ChatExporterGUI(LegacyGUI):
         parent.grid_rowconfigure(2, weight=1)
         parent.grid_columnconfigure(0, weight=1)
 
-        brand = tk.Frame(parent, bg=Palette.SIDEBAR, padx=16, pady=16)
+        brand = tk.Frame(parent, bg=Palette.SIDEBAR, padx=18, pady=18)
         brand.grid(row=0, column=0, sticky="ew")
         try:
             image = tk.PhotoImage(file=resource_path("assets", "window.png"))
@@ -334,14 +336,14 @@ class ChatExporterGUI(LegacyGUI):
             text="ChatExporter",
             bg=Palette.SIDEBAR,
             fg=Palette.TEXT_ON_DARK,
-            font=(FONT_UI, 12, "bold"),
+            font=(FONT_UI, 13, "bold"),
         ).pack(anchor=tk.W)
         tk.Label(
             text,
             text="本地、私密、可导出",
             bg=Palette.SIDEBAR,
             fg=Palette.TEXT_ON_DARK_MUTED,
-            font=(FONT_UI, 8),
+            font=(FONT_UI, 9),
         ).pack(anchor=tk.W, pady=(2, 0))
 
         section = tk.Frame(parent, bg=Palette.SIDEBAR, padx=12, pady=0)
@@ -351,7 +353,7 @@ class ChatExporterGUI(LegacyGUI):
             text="数据来源",
             bg=Palette.SIDEBAR,
             fg=Palette.TEXT_ON_DARK_MUTED,
-            font=(FONT_UI, 8, "bold"),
+            font=(FONT_UI, 9, "bold"),
         ).pack(anchor=tk.W, padx=6, pady=(5, 7))
 
         self.app_list_frame = ttk.Frame(parent, style="Sidebar.TFrame")
@@ -414,7 +416,7 @@ class ChatExporterGUI(LegacyGUI):
             bg=Palette.SIDEBAR,
             cursor="hand2" if available else "arrow",
             padx=9,
-            pady=8,
+            pady=10,
         )
         body.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
@@ -446,7 +448,7 @@ class ChatExporterGUI(LegacyGUI):
             anchor=tk.W,
             bg=Palette.SIDEBAR,
             fg=Palette.TEXT_ON_DARK_MUTED if available else Palette.SIDEBAR_TEXT_OFF,
-            font=(FONT_UI, 7),
+            font=(FONT_UI, 8),
         )
         meta.pack(fill=tk.X, pady=(1, 0))
         status = tk.Frame(
@@ -685,7 +687,7 @@ class ChatExporterGUI(LegacyGUI):
             insertbackground=Palette.TEXT,
             relief=tk.FLAT,
             bd=0,
-            font=(FONT_UI, 9),
+            font=(FONT_UI, 10),
             width=1,
         )
         self.search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=6)
@@ -762,45 +764,44 @@ class ChatExporterGUI(LegacyGUI):
         self.conv_tree.bind("<<TreeviewSelect>>", self._on_tree_selection_changed, add="+")
         self.conv_tree.bind("<Double-1>", self._on_tree_double_click)
         self.conv_tree.bind("<Button-3>", self._show_tree_context_menu)
+        self.conv_tree.bind("<Motion>", self._on_tree_hover, add="+")
+        self.conv_tree.bind("<Leave>", self._clear_tree_hover, add="+")
         self.conv_tree.bind("<Return>", self._focus_selected_preview)
         self.conv_tree.bind("<Control-a>", self._select_all_visible)
-        for tag, color in (
-            ("even", Palette.SURFACE),
-            ("odd", Palette.SURFACE_ALT),
-        ):
-            self.conv_tree.tag_configure(tag, background=color)
+        self.conv_tree.tag_configure("row", background=Palette.SURFACE)
+        self.conv_tree.tag_configure("hover", background=Palette.SURFACE_HOVER)
         self.conv_tree.tag_configure("empty", foreground=Palette.TEXT_MUTED)
         self.conv_tree.tag_configure("error", foreground=Palette.DANGER)
         self.conv_tree.tag_configure("loading", foreground=Palette.ACCENT)
 
         self.selection_bar = ttk.Frame(parent, style="SelectionBar.TFrame")
         self.selection_bar.grid(row=3, column=0, sticky="ew", padx=10, pady=(7, 0))
-        self.selection_bar.grid_columnconfigure(0, weight=1)
+        self.selection_bar.grid_columnconfigure(1, weight=1)
         self.selection_count_var = tk.StringVar(value="")
         ttk.Label(
             self.selection_bar,
             textvariable=self.selection_count_var,
             style="SelectionBar.TLabel",
-        ).grid(row=0, column=0, columnspan=3, sticky="w", padx=10, pady=(6, 1))
+        ).grid(row=0, column=0, sticky="w", padx=(10, 8), pady=6)
         ttk.Label(
             self.selection_bar,
             text="同一格式批量导出",
             style="SelectionBar.TLabel",
-        ).grid(row=1, column=0, sticky="w", padx=10, pady=(1, 6))
+        ).grid(row=0, column=1, sticky="w", padx=(0, 8), pady=6)
         ttk.Button(
             self.selection_bar,
             text="取消",
             width=5,
             style="SelectionAction.TButton",
             command=self._clear_tree_selection,
-        ).grid(row=1, column=1, padx=(4, 2), pady=(1, 4))
+        ).grid(row=0, column=2, padx=(2, 2), pady=4)
         ttk.Button(
             self.selection_bar,
             text="导出",
             width=5,
             style="SelectionAction.TButton",
             command=self._export_all,
-        ).grid(row=1, column=2, padx=(2, 5), pady=(1, 4))
+        ).grid(row=0, column=3, padx=(2, 5), pady=4)
         self.selection_bar.grid_remove()
 
         footer = ttk.Frame(parent, style="Surface.TFrame")
@@ -840,6 +841,34 @@ class ChatExporterGUI(LegacyGUI):
             return ""
         focused = self.conv_tree.focus()
         return focused if focused in selection else selection[-1]
+
+    def _on_tree_hover(self, event):
+        item_id = self.conv_tree.identify_row(event.y)
+        item_id = item_id if item_id in self._tree_conv_map else ""
+        if item_id == self._tree_hover_item:
+            return
+        self._clear_tree_hover()
+        if not item_id:
+            return
+        try:
+            tags = list(self.conv_tree.item(item_id, "tags"))
+            if "hover" not in tags:
+                tags.append("hover")
+                self.conv_tree.item(item_id, tags=tuple(tags))
+            self._tree_hover_item = item_id
+        except tk.TclError:
+            self._tree_hover_item = ""
+
+    def _clear_tree_hover(self, _event=None):
+        item_id = self._tree_hover_item
+        self._tree_hover_item = ""
+        if not item_id:
+            return
+        try:
+            tags = tuple(tag for tag in self.conv_tree.item(item_id, "tags") if tag != "hover")
+            self.conv_tree.item(item_id, tags=tags)
+        except tk.TclError:
+            pass
 
     def _update_selection_summary(self):
         var = getattr(self, "selection_summary_var", None)
@@ -973,7 +1002,7 @@ class ChatExporterGUI(LegacyGUI):
         if generation != self._tree_render_generation:
             return
         end = min(start + self.TREE_INSERT_BATCH_SIZE, len(matches))
-        for display_index, (source_index, conv) in enumerate(matches[start:end], start=start):
+        for _display_index, (source_index, conv) in enumerate(matches[start:end], start=start):
             count = conv.metadata.get("msg_count") if conv.metadata else None
             count_known = bool(conv.metadata.get("msg_count_known", True)) if conv.metadata else True
             if not count_known:
@@ -985,13 +1014,12 @@ class ChatExporterGUI(LegacyGUI):
                 title = title[:69] + "…"
             item_id = f"conv_{source_index}"
             self._tree_conv_map[item_id] = conv
-            tag = "even" if display_index % 2 == 0 else "odd"
             self.conv_tree.insert(
                 "",
                 tk.END,
                 iid=item_id,
                 values=(title, self._compact_updated_at(conv), count),
-                tags=(tag,),
+                tags=("row",),
             )
         if end < len(matches):
             self.root.after(1, lambda: self._insert_tree_batch(matches, end, generation))
@@ -1106,7 +1134,7 @@ class ChatExporterGUI(LegacyGUI):
             insertbackground=Palette.TEXT,
             relief=tk.FLAT,
             bd=0,
-            font=(FONT_UI, 9),
+            font=(FONT_UI, 10),
             width=1,
         )
         self.preview_find_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=6)
@@ -1221,19 +1249,19 @@ class ChatExporterGUI(LegacyGUI):
         self.preview_text = tk.Text(
             text_wrap,
             wrap=tk.WORD,
-            font=(FONT_UI, 10),
+            font=(FONT_UI, 11),
             bg=Palette.SURFACE,
             fg=Palette.TEXT_SECONDARY,
             insertbackground=Palette.TEXT,
             selectbackground=Palette.ACCENT_SOFT,
             selectforeground=Palette.TEXT,
-            padx=30,
-            pady=24,
+            padx=34,
+            pady=28,
             state=tk.DISABLED,
             borderwidth=0,
             highlightthickness=0,
-            spacing1=2,
-            spacing3=3,
+            spacing1=3,
+            spacing3=5,
             width=1,
             height=1,
         )
@@ -1679,6 +1707,13 @@ class ChatExporterGUI(LegacyGUI):
         self.root.bind("<Escape>", self._handle_escape)
         self.root.bind("<Alt-Left>", lambda _event: self._page_shortcut("older"))
         self.root.bind("<Alt-Right>", lambda _event: self._page_shortcut("newer"))
+
+    def _set_theme(self, name: str):
+        """Keep the product shell restrained after the legacy theme refresh."""
+        super()._set_theme(name)
+        self.conv_tree.tag_configure("row", background=Palette.SURFACE)
+        self.conv_tree.tag_configure("hover", background=Palette.SURFACE_HOVER)
+        self.theme_button.configure(text="浅色" if self.theme_name == "dark" else "深色")
 
     def _focus_preview_find(self, _event=None):
         if self._preview_find_placeholder_active:
